@@ -167,6 +167,8 @@ npm install
 npm start
 ```
 
+> **WSL:** `npm start` detects WSL and automatically adds `--no-sandbox`. You still need WSLg or an X server for the window to render.
+
 
 ---
 

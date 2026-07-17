@@ -4,10 +4,10 @@
   "description": "Desktop widget for Claude.ai usage monitoring",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node build/run-electron.js",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
-    "dev": "cross-env NODE_ENV=development electron .",
+    "dev": "cross-env NODE_ENV=development node build/run-electron.js",
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux"
   },
