@@ -2,6 +2,7 @@
 let credentials = null;
 let updateInterval = null;
 let countdownInterval = null;
+let currentDateTimeInterval = null;
 let latestUsageData = null;
 let isExpanded = false;
 let isCompactMode = false;
@@ -12,7 +13,7 @@ let graphWasVisible = false; // preserves graph state across compact mode toggle
 let appInitializing = true;  // suppresses _saveViewState during startup restore
 let isFetching = false;       // in-flight guard — prevents overlapping fetchUsageData calls
 const UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
-const WIDGET_HEIGHT_COLLAPSED = 155;
+const WIDGET_HEIGHT_COLLAPSED = 176;
 const WIDGET_ROW_HEIGHT = 30;
 const GRAPH_HEIGHT = 232;
 
@@ -43,22 +44,18 @@ const elements = {
     graphBtn: document.getElementById('graphBtn'),
     minimizeBtn: document.getElementById('minimizeBtn'),
     closeBtn: document.getElementById('closeBtn'),
+    currentDateTime: document.getElementById('currentDateTime'),
+    currentDateLine: document.getElementById('currentDateLine'),
+    currentTimeLine: document.getElementById('currentTimeLine'),
 
     sessionPercentage: document.getElementById('sessionPercentage'),
     sessionProgress: document.getElementById('sessionProgress'),
-    sessionTimer: document.getElementById('sessionTimer'),
     sessionTimeText: document.getElementById('sessionTimeText'),
 
     weeklyPercentage: document.getElementById('weeklyPercentage'),
     weeklyProgress: document.getElementById('weeklyProgress'),
-    weeklyTimer: document.getElementById('weeklyTimer'),
     weeklyTimeText: document.getElementById('weeklyTimeText'),
-    weeklyResetsAt: document.getElementById('weeklyResetsAt'),
 
-    sessionResetsAt: document.getElementById('sessionResetsAt'),
-
-    expandToggle: document.getElementById('expandToggle'),
-    expandArrow: document.getElementById('expandArrow'),
     expandSection: document.getElementById('expandSection'),
     extraRows: document.getElementById('extraRows'),
     graphSection: document.getElementById('graphSection'),
@@ -148,6 +145,7 @@ async function handleOrgChange() {
 // Initialize
 async function init() {
     setupEventListeners();
+    startCurrentDateTime();
     credentials = await window.electronAPI.getCredentials();
 
     // Apply saved theme and load thresholds immediately
@@ -184,7 +182,6 @@ async function init() {
     // Restore expanded state
     if (settings.expandedOpen) {
         isExpanded = true;
-        elements.expandArrow.classList.add('expanded');
         elements.expandSection.style.display = 'block';
     }
 
@@ -270,33 +267,6 @@ function setupEventListeners() {
         window.electronAPI.closeWindow();
     });
 
-    // Expand/collapse toggle
-    elements.expandToggle.addEventListener('click', async () => {
-        const wasExpanded = isExpanded;
-        isExpanded = !isExpanded;
-        elements.expandArrow.classList.toggle('expanded', isExpanded);
-        elements.expandSection.style.display = isExpanded ? 'block' : 'none';
-        if (graphVisible) {
-            loadChart();
-        }
-        resizeWidget();
-        
-        // CRITICAL: Update expandedOpen setting IMMEDIATELY (no debounce) to prevent race condition
-        // If we wait for the debounced save, auto-refresh might fetch with stale expandedOpen=false
-        const settings = window._cachedSettings || await window.electronAPI.getSettings();
-        settings.expandedOpen = isExpanded;
-        window._cachedSettings = settings;
-        await window.electronAPI.saveSettings(settings);
-        
-        // Trigger immediate fetch if panel was just opened (collapsed → expanded)
-        // This ensures fresh overage/prepaid data is available when user expands the panel
-        // Pass forceExtended to bypass any cached setting and fetch extended data immediately
-        if (!wasExpanded && isExpanded) {
-            debugLog('[Conditional Polling] Panel expanded - triggering immediate fetch with extended data');
-            await fetchUsageData({ forceExtended: true });
-        }
-    });
-
     // Settings close
     elements.closeSettingsBtn.addEventListener('click', async () => {
         await saveSettings();
@@ -376,10 +346,12 @@ function setupEventListeners() {
     });
 
     // Compact mode — collapse chevron (normal → compact)
-    elements.compactCollapseBtn.addEventListener('click', async () => {
-        applyCompactMode(true);
-        await _saveCompactSetting(true);
-    });
+    if (elements.compactCollapseBtn) {
+        elements.compactCollapseBtn.addEventListener('click', async () => {
+            applyCompactMode(true);
+            await _saveCompactSetting(true);
+        });
+    }
 
     // Compact mode — expand chevron (compact → normal)
     elements.compactExpandBtn.addEventListener('click', async () => {
@@ -718,11 +690,8 @@ function buildExtraRows(data) {
         count++;
     }
 
-    // Hide toggle if no extra rows
-    elements.expandToggle.style.display = count > 0 ? 'flex' : 'none';
     if (count === 0 && isExpanded) {
         isExpanded = false;
-        elements.expandArrow.classList.remove('expanded');
         elements.expandSection.style.display = 'none';
     }
 
@@ -862,7 +831,6 @@ function applyCompactMode(compact) {
     // Collapse extra rows when entering compact — prevents stale isExpanded state
     if (compact && isExpanded) {
         isExpanded = false;
-        elements.expandArrow.classList.remove('expanded');
         elements.expandSection.style.display = 'none';
     }
 
@@ -1020,14 +988,13 @@ function refreshTimers() {
         sessionUtilization
     );
 
-    updateTimer(
-        elements.sessionTimer,
-        elements.sessionTimeText,
-        sessionResetsAt,
-        5 * 60 // 5 hours in minutes
-    );
-    elements.sessionResetsAt.textContent = formatResetsAt(sessionResetsAt, false, timeFormat, weeklyDateFormat);
-    elements.sessionResetsAt.style.opacity = sessionResetsAt ? '1' : '0.4';
+    if (sessionResetsAt) {
+        elements.sessionTimeText.textContent = `Resets ${formatResetsAt(sessionResetsAt, false, timeFormat, weeklyDateFormat)}.`;
+        elements.sessionTimeText.style.opacity = '1';
+    } else {
+        elements.sessionTimeText.textContent = 'Resets --.';
+        elements.sessionTimeText.style.opacity = '0.4';
+    }
 
     // Weekly data
     const weeklyUtilization = latestUsageData.seven_day?.utilization || 0;
@@ -1054,14 +1021,13 @@ function refreshTimers() {
         true
     );
 
-    updateTimer(
-        elements.weeklyTimer,
-        elements.weeklyTimeText,
-        weeklyResetsAt,
-        7 * 24 * 60 // 7 days in minutes
-    );
-    elements.weeklyResetsAt.textContent = formatResetsAt(weeklyResetsAt, true, timeFormat, weeklyDateFormat);
-    elements.weeklyResetsAt.style.opacity = weeklyResetsAt ? '1' : '0.4';
+    if (weeklyResetsAt) {
+        elements.weeklyTimeText.textContent = `Resets ${formatResetsAt(weeklyResetsAt, true, timeFormat, weeklyDateFormat)}.`;
+        elements.weeklyTimeText.style.opacity = '1';
+    } else {
+        elements.weeklyTimeText.textContent = 'Resets --.';
+        elements.weeklyTimeText.style.opacity = '0.4';
+    }
 }
 
 function startCountdown() {
@@ -1128,7 +1094,9 @@ function updateTimer(timerElement, textElement, resetsAt, totalMinutes) {
         textElement.style.opacity = '0.4';
         textElement.style.fontSize = '10px';
         textElement.title = 'Starts when a message is sent';
-        timerElement.style.strokeDashoffset = 63;
+        if (timerElement) {
+            timerElement.style.strokeDashoffset = 63;
+        }
         return;
     }
 
@@ -1143,7 +1111,9 @@ function updateTimer(timerElement, textElement, resetsAt, totalMinutes) {
 
     if (diff <= 0) {
         textElement.textContent = 'Resetting...';
-        timerElement.style.strokeDashoffset = 0;
+        if (timerElement) {
+            timerElement.style.strokeDashoffset = 0;
+        }
         return;
     }
 
@@ -1171,14 +1141,18 @@ function updateTimer(timerElement, textElement, resetsAt, totalMinutes) {
     // Update circle (63 is ~2*pi*10)
     const circumference = 63;
     const offset = circumference - (elapsedPercentage / 100) * circumference;
-    timerElement.style.strokeDashoffset = offset;
+    if (timerElement) {
+        timerElement.style.strokeDashoffset = offset;
+    }
 
     // Update color based on remaining time
-    timerElement.classList.remove('warning', 'danger');
-    if (elapsedPercentage >= 90) {
-        timerElement.classList.add('danger');
-    } else if (elapsedPercentage >= 75) {
-        timerElement.classList.add('warning');
+    if (timerElement) {
+        timerElement.classList.remove('warning', 'danger');
+        if (elapsedPercentage >= 90) {
+            timerElement.classList.add('danger');
+        } else if (elapsedPercentage >= 75) {
+            timerElement.classList.add('warning');
+        }
     }
 }
 
@@ -1248,6 +1222,40 @@ function startAutoUpdate() {
         await fetchUsageData();
         if (elements.refreshBtn) elements.refreshBtn.classList.remove('spinning');
     }, intervalSecs * 1000);
+}
+
+function formatCurrentDateTime() {
+    const settings = window._cachedSettings || {};
+    const now = new Date();
+    const datePart = new Intl.DateTimeFormat('ja-JP-u-ca-gregory', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'short'
+    }).format(now);
+    const timePart = new Intl.DateTimeFormat('ja-JP', {
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: (settings.timeFormat || '12h') === '12h'
+    }).format(now);
+
+    return { datePart, timePart };
+}
+
+function updateCurrentDateTime() {
+    if (!elements.currentDateLine || !elements.currentTimeLine) return;
+    const { datePart, timePart } = formatCurrentDateTime();
+    elements.currentDateLine.textContent = datePart;
+    elements.currentTimeLine.textContent = timePart;
+}
+
+function startCurrentDateTime() {
+    updateCurrentDateTime();
+    if (currentDateTimeInterval) {
+        clearInterval(currentDateTimeInterval);
+    }
+    currentDateTimeInterval = setInterval(updateCurrentDateTime, 1000);
 }
 
 function stopAutoUpdate() {
@@ -1655,7 +1663,10 @@ async function checkForUpdate() {
 }
 
 // Start the application
-init();
+init().catch((error) => {
+    console.error('Initialization failed:', error);
+    showLoginRequired();
+});
 window.addEventListener('beforeunload', () => {
     stopAutoUpdate();
     if (countdownInterval) clearInterval(countdownInterval);

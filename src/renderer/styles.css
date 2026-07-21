@@ -13,6 +13,12 @@
     src: url('../../assets/fonts/LibreBaskerville-Bold.ttf') format('truetype');
 }
 
+html {
+    width: 100%;
+    height: 100%;
+    background: #1e1e2e;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -22,9 +28,11 @@
 }
 
 body {
+    width: 100%;
+    height: 100%;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     overflow: hidden;
-    background: transparent;
+    background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
     -webkit-app-region: no-drag;
 }
 
@@ -34,6 +42,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
 }
 
 .widget-container {
@@ -45,15 +54,15 @@ body {
     border-radius: 10px;
     display: flex;
     flex-direction: column;
+    -webkit-app-region: drag;
 }
 
 /* Title Bar */
 .title-bar {
-    -webkit-app-region: drag;
     background: rgba(0, 0, 0, 0.3);
     padding: 8px 12px;
     padding-left: 6px;
-    display: flex;
+    display: none;
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -112,6 +121,18 @@ body {
 .close-btn:hover {
     background: #e74c3c;
     color: white;
+}
+
+button,
+input,
+select,
+textarea,
+a,
+canvas,
+.update-banner,
+.settings-overlay,
+.compact-settings-overlay {
+    -webkit-app-region: no-drag;
 }
 
 /* Loading State */
@@ -447,16 +468,38 @@ body {
 
 /* Main Content */
 .content {
-    padding: 16px 20px;
+    padding: 14px 4px 8px 14px;
     position: relative;
+}
+
+.current-datetime {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    color: #b8b8c8;
+    font-variant-numeric: tabular-nums;
+    margin: 0 0 14px 12px;
+    white-space: nowrap;
+}
+
+.current-date-line {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1.15;
+}
+
+.current-time-line {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1.05;
 }
 
 /* Expand Toggle */
 .expand-toggle {
-    display: flex;
-    justify-content: center;
-    padding: 2px 0 0;
-    cursor: pointer;
+    display: none;
 }
 
 .expand-arrow {
@@ -550,11 +593,32 @@ body.theme-light .graph-btn.active {
     text-align: right;
 }
 
+.usage-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0 0 0 12px;
+    margin-top: -4px;
+}
+
+.primary-usage-block {
+    margin-bottom: 12px;
+}
+
+.usage-block-label {
+    font-size: 12px;
+    letter-spacing: 0.55px;
+    line-height: 1.05;
+    margin-bottom: -7px;
+}
+
 /* Bar + percentage grouped */
 .usage-bar-group {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 2px;
+    min-width: 0;
+    width: 100%;
 }
 
 .usage-bar-group .progress-bar {
@@ -579,6 +643,39 @@ body.theme-light .graph-btn.active {
     white-space: nowrap;
 }
 
+.reset-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 1px;
+    min-width: 0;
+    transform: translateX(-10px);
+}
+
+.reset-stack-text {
+    width: auto;
+    line-height: 1.05;
+    text-align: right;
+}
+
+.usage-meta-line {
+    display: flex;
+    align-items: center;
+    margin-top: -7px;
+    margin-left: 0;
+    padding-left: 4px;
+}
+
+.usage-meta-line .usage-meta-text {
+    width: auto;
+    font-size: 11px;
+    line-height: 1.05;
+    text-align: left;
+    color: #a0a0a0;
+    font-weight: 600;
+}
+
 .usage-section:last-of-type {
     margin-bottom: 0;
 }
@@ -587,14 +684,14 @@ body.theme-light .graph-btn.active {
 
 
 /* We need to re-target the children of usage-header because display:contents strips the wrapper box */
-/* But the HTML structure is: 
+/* But the HTML structure is:
    .usage-section > .usage-header > span, span
    .usage-section > .progress-bar
    .usage-section > .timer-container
 */
-/* Actually, let's just make usage-header NOT display contents, but hide it or remove it in HTML? 
-   Better: make usage-section a Flex Row? 
-   Or keeps Grid: 
+/* Actually, let's just make usage-header NOT display contents, but hide it or remove it in HTML?
+   Better: make usage-section a Flex Row?
+   Or keeps Grid:
    Column 1: Label
    Column 2: Progress (flexible)
    Column 3: Percentage
@@ -610,11 +707,20 @@ body.theme-light .graph-btn.active {
     white-space: nowrap;
 }
 
+.primary-usage-section {
+    grid-template-columns: minmax(0, 1fr) 30px;
+    gap: 2px;
+    min-height: 24px;
+    padding: 0;
+    margin-bottom: 0;
+}
+
 .usage-percentage {
     color: #e0e0e0;
     font-size: 13px;
     font-weight: 700;
     text-align: right;
+    min-width: 24px;
 }
 
 /* Progress Bar */
@@ -687,13 +793,6 @@ body.theme-light .graph-btn.active {
 
 
 /* Circle only — centered in its column */
-.usage-elapsed-group {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding-left: 8px;
-}
-
 /* Timer elements sit inside usage-timer-group flex container */
 .mini-timer {
     transform: rotate(-90deg);
@@ -747,7 +846,7 @@ body.theme-light .graph-btn.active {
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     font-family: inherit;
-    text-align: center;
+    text-align: right;
     white-space: nowrap;
     width: 72px;
 }
@@ -1207,7 +1306,15 @@ body.theme-light .settings-title {
     color: #1a1a2e;
 }
 
+body.theme-light .current-datetime {
+    color: #4b5563;
+}
+
 body.theme-light .usage-label {
+    color: #606080;
+}
+
+body.theme-light .usage-meta-line .usage-meta-text {
     color: #606080;
 }
 
@@ -1384,25 +1491,11 @@ body.compact-mode .title {
 
 /* Collapse chevron — fixed position in content area, does not move when rows expand */
 .compact-collapse-btn {
-    position: absolute;
-    left: 2px;
-    top: 40px;  /* fixed offset within .content: centers on the two main rows */
-    width: 18px;
-    height: 36px;
-    background: none;
-    border: none;
-    color: #505050;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: color 0.2s;
-    padding: 0;
-    z-index: 5;
+    display: none !important;
 }
 
 .compact-collapse-btn:hover {
-    color: #a0a0a0;
+    display: none !important;
 }
 
 /* Compact content container */
