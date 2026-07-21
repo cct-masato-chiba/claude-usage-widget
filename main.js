@@ -211,11 +211,15 @@ function createMainWindow() {
     mainWindow = null;
   });
 
-  mainWindow.on('blur', () => {
-    if (store.get('settings.alwaysOnTop', true)) {
-      setTimeout(() => enforceAlwaysOnTop(true), 50);
-    }
-  });
+  // On WSL the PowerShell SetWindowPos enforcer keeps the window topmost without
+  // the flicker that setAlwaysOnTop causes on RAIL, so skip this re-assertion.
+  if (!isWsl) {
+    mainWindow.on('blur', () => {
+      if (store.get('settings.alwaysOnTop', true)) {
+        setTimeout(() => enforceAlwaysOnTop(true), 50);
+      }
+    });
+  }
 
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -1752,14 +1756,20 @@ app.whenReady().then(async () => {
 
   // Periodic always-on-top re-assertion to recover from z-order disruptions
   // (hidden window spawns, window manager shortcuts, alt-tab, etc.)
-  setInterval(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const alwaysOnTopSetting = store.get('settings.alwaysOnTop', true);
-      if (alwaysOnTopSetting) {
-        enforceAlwaysOnTop(true);
+  //
+  // Skipped on WSL: setAlwaysOnTop re-layers the RAIL window every tick, which
+  // WSLg renders as a visible flicker. The PowerShell SetWindowPos enforcer keeps
+  // the window topmost non-disruptively there, so this loop is redundant on WSL.
+  if (!isWsl) {
+    setInterval(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const alwaysOnTopSetting = store.get('settings.alwaysOnTop', true);
+        if (alwaysOnTopSetting) {
+          enforceAlwaysOnTop(true);
+        }
       }
-    }
-  }, 5000);
+    }, 5000);
+  }
 });
 
 app.on('window-all-closed', () => {
