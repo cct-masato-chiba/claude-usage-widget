@@ -169,6 +169,29 @@ npm start
 
 > **WSL:** `npm start` detects WSL and automatically adds `--no-sandbox`. You still need WSLg or an X server for the window to render.
 
+#### Windows: Run and Build Natively
+
+If your final target is Windows, do the final run/build on **native Windows**, not inside WSL.
+
+```powershell
+git clone https://github.com/SlavomirDurej/claude-usage-widget.git
+cd claude-usage-widget
+npm install
+npm start
+```
+
+To build Windows artifacts:
+
+```powershell
+npm run build:win
+```
+
+Build outputs are written to `dist/`:
+- `Claude-Usage-Widget-{version}-win-Setup.exe`
+- `Claude-Usage-Widget-{version}-win-portable.exe`
+
+> **Recommended:** Use the portable build first to verify always-on-top behaviour, sizing, drag behaviour, and startup flow on native Windows before using the installer build.
+
 
 ---
 
