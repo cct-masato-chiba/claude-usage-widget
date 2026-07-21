@@ -695,14 +695,26 @@ function sendToRenderer(channel, payload) {
   }
 }
 
-// WSL path: one PS call returns "SYS <cpu> <ram> <battery>".
-// Win32_PerfFormattedData_PerfOS_Processor avoids Get-Counter's localised
-// counter names (e.g. Japanese Windows) and its extra sampling cost.
+// WSL path: one PS call returns "SYS <cpu> <ram> <battery>". Uses CIM perf
+// classes (not Get-Counter, which has localised counter names on e.g. Japanese
+// Windows) and matches Task Manager's numbers:
+//   CPU = Processor Information \ % Processor Utility (frequency-scaled, what
+//         Task Manager shows; can exceed 100 under turbo, so clamp). Falls back
+//         to PerfOS_Processor \ % Processor Time on older Windows lacking it.
+//   RAM = (Total - AvailableMBytes) — AvailableMBytes counts standby cache as
+//         free, matching Task Manager's "available"; FreePhysicalMemory doesn't.
 function pollWslSystem() {
   const script = `$os = Get-CimInstance Win32_OperatingSystem
-$c = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Where-Object { $_.Name -eq '_Total' }
-$cpu = if ($c) { [math]::Round($c.PercentProcessorTime) } else { -1 }
-$ram = [math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100)
+$pi = Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq '_Total' }
+if ($pi) {
+  $cpu = [math]::Min(100, [math]::Round($pi.PercentProcessorUtility))
+} else {
+  $c = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Where-Object { $_.Name -eq '_Total' }
+  $cpu = if ($c) { [math]::Round($c.PercentProcessorTime) } else { -1 }
+}
+$m = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory
+$totalMB = $os.TotalVisibleMemorySize / 1024
+$ram = if ($m -and $totalMB -gt 0) { [math]::Round((($totalMB - $m.AvailableMBytes) / $totalMB) * 100) } else { -1 }
 $bat = Get-CimInstance Win32_Battery | Select-Object -First 1
 $b = if ($bat) { "$($bat.EstimatedChargeRemaining) $($bat.BatteryStatus)" } else { "none" }
 Write-Output "SYS $cpu $ram $b"`;
@@ -711,13 +723,14 @@ Write-Output "SYS $cpu $ram $b"`;
   child.stdout.on('data', (d) => { out += d; });
   child.on('close', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    const match = out.match(/^SYS (-?\d+) (\d+) (none|(\d+) (\d+))/m);
+    const match = out.match(/^SYS (-?\d+) (-?\d+) (none|(\d+) (\d+))/m);
     if (!match) return;
 
     const cpu = Number(match[1]);
     const ram = Number(match[2]);
-    const sysload = { available: true, ram };
+    const sysload = { available: true };
     if (cpu >= 0) sysload.cpu = cpu;
+    if (ram >= 0) sysload.ram = ram;
     sendToRenderer('sysload-status', sysload);
 
     if (match[3] === 'none') {
