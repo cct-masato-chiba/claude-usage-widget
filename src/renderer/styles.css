@@ -803,6 +803,15 @@ body.theme-light .graph-btn.active {
     letter-spacing: 0.55px;
     line-height: 1.05;
     margin-bottom: -7px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.claude-mark {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
 }
 
 /* Bar + percentage grouped */
