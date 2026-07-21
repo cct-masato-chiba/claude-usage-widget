@@ -193,8 +193,9 @@ function createMainWindow() {
   });
   mainWindow.webContents.on('did-finish-load', () => {
     // did-finish-load fires on every (re)load; push fresh readings immediately
-    // and start the timer once.
+    // and start the timers once.
     systemTimer ? pollSystem() : startSystemPolling();
+    weatherTimer ? pollWeather() : startWeatherPolling();
   });
 
   let positionSaveTimer = null;
@@ -761,6 +762,86 @@ function startSystemPolling() {
   systemTimer = setInterval(pollSystem, SYSTEM_POLL_MS);
 }
 
+/*
+ * Weather comes from Open-Meteo (free, no API key). The main process geocodes
+ * each configured location name to coordinates once (cached), then polls the
+ * current-conditions endpoint. Runs on every platform.
+ */
+const WEATHER_POLL_MS = 30 * 60 * 1000;
+let weatherTimer = null;
+const geoCache = new Map(); // location query -> { lat, lon, name }
+
+function httpsGetJson(url) {
+  return new Promise((resolve) => {
+    const req = https.request(url, { method: 'GET', timeout: 5000, headers: { 'User-Agent': 'claude-usage-widget' } }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+async function geocode(query) {
+  if (geoCache.has(query)) return geoCache.get(query);
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=ja&format=json`;
+  const data = await httpsGetJson(url);
+  const r = data && data.results && data.results[0];
+  if (!r) return null;
+  const geo = { lat: r.latitude, lon: r.longitude, name: r.name };
+  geoCache.set(query, geo);
+  return geo;
+}
+
+// "lat,lon" (e.g. "35.7295,139.7109") is used verbatim — bypasses geocoding so
+// exact spots survive Open-Meteo's imperfect place-name matching.
+function parseCoords(query) {
+  const m = query.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (!m) return null;
+  const lat = Number(m[1]);
+  const lon = Number(m[2]);
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon, name: query };
+}
+
+async function fetchWeatherFor(loc) {
+  const geo = parseCoords(loc.query) || await geocode(loc.query);
+  if (!geo) return null;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,weather_code`;
+  const data = await httpsGetJson(url);
+  if (!data || !data.current) return null;
+  return {
+    label: loc.label || geo.name,
+    temp: Math.round(data.current.temperature_2m),
+    code: data.current.weather_code
+  };
+}
+
+async function pollWeather() {
+  const locations = store.get('settings.weatherLocations', []);
+  const results = [];
+  for (const loc of locations) {
+    if (!loc || !loc.query) continue;
+    try {
+      const w = await fetchWeatherFor(loc);
+      if (w) results.push(w);
+    } catch (err) {
+      debugLog('Weather fetch failed for', loc.query, err.message);
+    }
+  }
+  sendToRenderer('weather-status', results);
+}
+
+function startWeatherPolling() {
+  if (weatherTimer) clearInterval(weatherTimer);
+  pollWeather();
+  weatherTimer = setInterval(pollWeather, WEATHER_POLL_MS);
+}
+
 function createTray() {
   // Respect the tray stats setting even when createTray is called from generic refresh paths.
   if (!store.get('settings.showTrayStats', false)) {
@@ -1231,7 +1312,8 @@ ipcMain.handle('get-settings', () => {
     refreshInterval: store.get('settings.refreshInterval', '300'),
     graphVisible: store.get('settings.graphVisible', false),
     expandedOpen: store.get('settings.expandedOpen', false),
-    showTrayStats: store.get('settings.showTrayStats', false)
+    showTrayStats: store.get('settings.showTrayStats', false),
+    weatherLocations: store.get('settings.weatherLocations', [])
   };
 });
 
@@ -1253,6 +1335,13 @@ ipcMain.handle('save-settings', (event, settings) => {
   store.set('settings.graphVisible', settings.graphVisible);
   store.set('settings.expandedOpen', settings.expandedOpen);
   store.set('settings.showTrayStats', settings.showTrayStats);
+
+  // Weather locations may have changed — refetch immediately (also picks up new
+  // geocoding for any changed location query)
+  if (Array.isArray(settings.weatherLocations)) {
+    store.set('settings.weatherLocations', settings.weatherLocations);
+    startWeatherPolling();
+  }
 
   const isPortable = process.platform === 'win32' && !!process.env.PORTABLE_EXECUTABLE_FILE;
 

@@ -50,11 +50,16 @@ const elements = {
     batteryIndicator: document.getElementById('batteryIndicator'),
     batteryFill: document.getElementById('batteryFill'),
     batteryText: document.getElementById('batteryText'),
+    weatherBlock: document.getElementById('weatherBlock'),
     systemRow: document.getElementById('systemRow'),
     cpuFill: document.getElementById('cpuFill'),
     cpuPct: document.getElementById('cpuPct'),
     ramFill: document.getElementById('ramFill'),
     ramPct: document.getElementById('ramPct'),
+    weatherLabel1: document.getElementById('weatherLabel1'),
+    weatherQuery1: document.getElementById('weatherQuery1'),
+    weatherLabel2: document.getElementById('weatherLabel2'),
+    weatherQuery2: document.getElementById('weatherQuery2'),
 
     sessionPercentage: document.getElementById('sessionPercentage'),
     sessionProgress: document.getElementById('sessionProgress'),
@@ -1312,6 +1317,37 @@ async function setupBattery() {
     }
 }
 
+// WMO weather code → emoji (Open-Meteo current.weather_code)
+function weatherEmoji(code) {
+    if (code === 0) return '☀️';
+    if (code === 1 || code === 2) return '⛅';
+    if (code === 3) return '☁️';
+    if (code === 45 || code === 48) return '🌫️';
+    if (code >= 51 && code <= 57) return '🌦️';
+    if (code >= 61 && code <= 67) return '🌧️';
+    if (code >= 71 && code <= 77) return '🌨️';
+    if (code >= 80 && code <= 82) return '🌧️';
+    if (code === 85 || code === 86) return '❄️';
+    if (code >= 95) return '⛈️';
+    return '🌡️';
+}
+
+function renderWeather(list) {
+    if (!elements.weatherBlock) return;
+    if (!Array.isArray(list) || list.length === 0) {
+        elements.weatherBlock.style.display = 'none';
+        elements.weatherBlock.innerHTML = '';
+        return;
+    }
+    elements.weatherBlock.innerHTML = list.map((w) => `
+        <div class="weather-entry">
+            <span class="weather-loc-name">${escapeHtml(w.label)}</span>
+            <span class="weather-icon">${weatherEmoji(w.code)}</span>
+            <span class="weather-temp">${Math.round(w.temp)}°</span>
+        </div>`).join('');
+    elements.weatherBlock.style.display = 'flex';
+}
+
 function setSysmeter(fillEl, pctEl, value) {
     if (value === undefined || value === null) return;
     const v = Math.max(0, Math.min(100, Math.round(value)));
@@ -1337,6 +1373,13 @@ function renderSysload(info) {
 
 function setupSystemStats() {
     window.electronAPI.onSysloadStatus(renderSysload);
+    window.electronAPI.onWeatherStatus(renderWeather);
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = String(str == null ? '' : str);
+    return div.innerHTML;
 }
 
 function stopAutoUpdate() {
@@ -1641,6 +1684,11 @@ async function loadSettings() {
     elements.timeFormat.value = settings.timeFormat || '12h';
     elements.weeklyDateFormat.value = settings.weeklyDateFormat || 'date';
     if (elements.refreshInterval) elements.refreshInterval.value = settings.refreshInterval || '300';
+    const weatherLocations = Array.isArray(settings.weatherLocations) ? settings.weatherLocations : [];
+    if (elements.weatherLabel1) elements.weatherLabel1.value = weatherLocations[0]?.label || '';
+    if (elements.weatherQuery1) elements.weatherQuery1.value = weatherLocations[0]?.query || '';
+    if (elements.weatherLabel2) elements.weatherLabel2.value = weatherLocations[1]?.label || '';
+    if (elements.weatherQuery2) elements.weatherQuery2.value = weatherLocations[1]?.query || '';
     elements.usageAlertsToggle.checked = settings.usageAlerts !== false;
     if (elements.compactModeToggle) elements.compactModeToggle.checked = !!settings.compactMode;
 
@@ -1660,6 +1708,15 @@ async function loadSettings() {
     if (window.electronAPI.platform === 'darwin') {
         document.getElementById('trayLabel').textContent = 'Hide from Dock';
     }
+}
+
+function buildWeatherLocations() {
+    const pairs = [
+        { label: elements.weatherLabel1?.value.trim() || '', query: elements.weatherQuery1?.value.trim() || '' },
+        { label: elements.weatherLabel2?.value.trim() || '', query: elements.weatherQuery2?.value.trim() || '' }
+    ];
+    // Persist only rows that have a city query; drop empty ones
+    return pairs.filter((p) => p.query);
 }
 
 async function saveSettings() {
@@ -1687,6 +1744,7 @@ async function saveSettings() {
         timeFormat: elements.timeFormat.value || '12h',
         weeklyDateFormat: elements.weeklyDateFormat.value || 'date',
         refreshInterval: elements.refreshInterval ? (elements.refreshInterval.value || '300') : '300',
+        weatherLocations: buildWeatherLocations(),
         usageAlerts: elements.usageAlertsToggle.checked,
         compactMode: isCompactMode,
         graphVisible: graphVisible,

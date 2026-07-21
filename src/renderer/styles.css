@@ -562,6 +562,44 @@ canvas,
     color: #ef4444;
 }
 
+/* Weather — top-right, side by side under the battery indicator */
+.weather-block {
+    position: absolute;
+    top: 34px;
+    right: 14px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    color: #b8b8c8;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.weather-entry {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1.1;
+}
+
+.weather-loc-name {
+    color: #8a8a9a;
+    max-width: 68px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.weather-icon {
+    font-size: 12px;
+}
+
+.weather-temp {
+    font-weight: 700;
+}
+
 /* System load row (CPU / RAM) — above the usage blocks, divider below */
 .system-row {
     display: flex;
@@ -618,6 +656,38 @@ canvas,
     font-variant-numeric: tabular-nums;
     min-width: 30px;
     text-align: right;
+}
+
+/* Weather location settings inputs */
+.weather-loc-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.weather-loc-label {
+    width: 72px;
+    flex: 0 0 auto;
+}
+
+.weather-loc-query {
+    flex: 1;
+    min-width: 0;
+}
+
+.weather-loc-label,
+.weather-loc-query {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: inherit;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+
+.weather-loc-label:focus,
+.weather-loc-query:focus {
+    border-color: #7c7cf0;
 }
 
 /* Expand Toggle */
@@ -1445,6 +1515,14 @@ body.theme-light .battery-indicator.low {
     color: #dc2626;
 }
 
+body.theme-light .weather-block {
+    color: #4b5563;
+}
+
+body.theme-light .weather-loc-name {
+    color: #6b7280;
+}
+
 body.theme-light .sysmeter-label {
     color: #6b7280;
 }
@@ -1459,6 +1537,12 @@ body.theme-light .sysmeter-bar {
 
 body.theme-light .system-row {
     border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+body.theme-light .weather-loc-label,
+body.theme-light .weather-loc-query {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.15);
 }
 
 body.theme-light .usage-label {

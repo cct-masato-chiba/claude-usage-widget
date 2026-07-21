@@ -129,6 +129,8 @@
                     <span class="battery-text" id="batteryText">--%</span>
                 </div>
 
+                <div class="weather-block" id="weatherBlock" style="display: none;"></div>
+
                 <!-- System load (CPU / RAM), above the usage blocks -->
                 <div class="system-row" id="systemRow" style="display: none;">
                     <div class="sysmeter">
@@ -347,6 +349,19 @@
                                     <option value="120">Every 2 min</option>
                                     <option value="300" selected>Every 5 min</option>
                                 </select>
+                            </div>
+                        </div>
+
+                        <!-- Row 7: weather locations (up to 2) -->
+                        <div class="settings-row">
+                            <span class="settings-row-label">Weather locations</span>
+                            <div class="weather-loc-row">
+                                <input type="text" id="weatherLabel1" class="weather-loc-label" placeholder="Label" spellcheck="false" autocomplete="off">
+                                <input type="text" id="weatherQuery1" class="weather-loc-query" placeholder="City (e.g. Yokohama)" spellcheck="false" autocomplete="off">
+                            </div>
+                            <div class="weather-loc-row">
+                                <input type="text" id="weatherLabel2" class="weather-loc-label" placeholder="Label" spellcheck="false" autocomplete="off">
+                                <input type="text" id="weatherQuery2" class="weather-loc-query" placeholder="City (e.g. Tokyo)" spellcheck="false" autocomplete="off">
                             </div>
                         </div>
 

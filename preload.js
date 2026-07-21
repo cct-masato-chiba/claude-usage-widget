@@ -49,6 +49,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSysloadStatus: (callback) => {
     ipcRenderer.on('sysload-status', (event, info) => callback(info));
   },
+  onWeatherStatus: (callback) => {
+    ipcRenderer.on('weather-status', (event, list) => callback(list));
+  },
 
   // API
   fetchUsageData: () => ipcRenderer.invoke('fetch-usage-data'),
