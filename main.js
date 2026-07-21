@@ -7,6 +7,16 @@ const { fetchViaWindow, fetchMultipleViaWindow } = require('./src/fetch-via-wind
 const GITHUB_OWNER = 'SlavomirDurej';
 const GITHUB_REPO = 'claude-usage-widget';
 
+const isWsl = process.platform === 'linux' &&
+  (require('os').release().toLowerCase().includes('microsoft') || Boolean(process.env.WSL_DISTRO_NAME));
+
+// WSL's virtual GPU (dxgkrnl/D3D12) corrupts composited frames — windows render
+// with an X-cross artifact. Software rendering avoids it. Transparency is also
+// unsupported by WSLg, so the window falls back to opaque there.
+if (isWsl) {
+  app.disableHardwareAcceleration();
+}
+
 // Migration: Handle old encrypted config files from v1.7.0 and earlier
 // Must happen BEFORE creating Store instance to prevent parse errors
 const fs = require('fs');
@@ -158,7 +168,8 @@ function createMainWindow() {
     width: WIDGET_WIDTH,
     height: WIDGET_HEIGHT,
     frame: false,
-    transparent: true,
+    transparent: process.platform !== 'win32' && !isWsl,
+    backgroundColor: '#1e1e2e',
     alwaysOnTop: true,
     resizable: false,
     skipTaskbar: false,
