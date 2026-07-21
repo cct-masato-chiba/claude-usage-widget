@@ -497,6 +497,129 @@ canvas,
     line-height: 1.05;
 }
 
+/* Battery indicator — top-right, aligned with the date line */
+.battery-indicator {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #b8b8c8;
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.battery-icon {
+    display: flex;
+    align-items: center;
+}
+
+.battery-body {
+    display: block;
+    width: 18px;
+    height: 9px;
+    border: 1.5px solid currentColor;
+    border-radius: 2px;
+    padding: 1px;
+}
+
+.battery-fill {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: currentColor;
+    border-radius: 1px;
+    transition: width 0.3s ease;
+}
+
+.battery-cap {
+    display: block;
+    width: 2px;
+    height: 4px;
+    margin-left: 1px;
+    background: currentColor;
+    border-radius: 0 1px 1px 0;
+}
+
+.battery-bolt {
+    display: none;
+    font-size: 9px;
+    line-height: 1;
+}
+
+.battery-indicator.charging {
+    color: #22c55e;
+}
+
+.battery-indicator.charging .battery-bolt {
+    display: inline;
+}
+
+.battery-indicator.low {
+    color: #ef4444;
+}
+
+/* System load row (CPU / RAM) — above the usage blocks, divider below */
+.system-row {
+    display: flex;
+    gap: 12px;
+    margin: 0 12px 12px 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sysmeter {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+}
+
+.sysmeter-label {
+    color: #8a8a9a;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.sysmeter-bar {
+    flex: 1;
+    min-width: 0;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.sysmeter-fill {
+    height: 100%;
+    width: 0%;
+    background: #7c7cf0;
+    border-radius: 3px;
+    transition: width 0.4s ease;
+}
+
+.sysmeter-fill.warn {
+    background: #f59e0b;
+}
+
+.sysmeter-fill.danger {
+    background: #ef4444;
+}
+
+.sysmeter-pct {
+    color: #b8b8c8;
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    min-width: 30px;
+    text-align: right;
+}
+
 /* Expand Toggle */
 .expand-toggle {
     display: none;
@@ -1308,6 +1431,34 @@ body.theme-light .settings-title {
 
 body.theme-light .current-datetime {
     color: #4b5563;
+}
+
+body.theme-light .battery-indicator {
+    color: #4b5563;
+}
+
+body.theme-light .battery-indicator.charging {
+    color: #16a34a;
+}
+
+body.theme-light .battery-indicator.low {
+    color: #dc2626;
+}
+
+body.theme-light .sysmeter-label {
+    color: #6b7280;
+}
+
+body.theme-light .sysmeter-pct {
+    color: #4b5563;
+}
+
+body.theme-light .sysmeter-bar {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+body.theme-light .system-row {
+    border-bottom-color: rgba(0, 0, 0, 0.1);
 }
 
 body.theme-light .usage-label {

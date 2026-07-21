@@ -120,6 +120,29 @@
                     <div class="current-time-line" id="currentTimeLine">--:--:--</div>
                 </div>
 
+                <div class="battery-indicator" id="batteryIndicator" style="display: none;">
+                    <span class="battery-icon">
+                        <span class="battery-body"><span class="battery-fill" id="batteryFill"></span></span>
+                        <span class="battery-cap"></span>
+                    </span>
+                    <span class="battery-bolt">⚡</span>
+                    <span class="battery-text" id="batteryText">--%</span>
+                </div>
+
+                <!-- System load (CPU / RAM), above the usage blocks -->
+                <div class="system-row" id="systemRow" style="display: none;">
+                    <div class="sysmeter">
+                        <span class="sysmeter-label">CPU</span>
+                        <div class="sysmeter-bar"><div class="sysmeter-fill" id="cpuFill" style="width: 0%"></div></div>
+                        <span class="sysmeter-pct" id="cpuPct">--%</span>
+                    </div>
+                    <div class="sysmeter">
+                        <span class="sysmeter-label">RAM</span>
+                        <div class="sysmeter-bar"><div class="sysmeter-fill" id="ramFill" style="width: 0%"></div></div>
+                        <span class="sysmeter-pct" id="ramPct">--%</span>
+                    </div>
+                </div>
+
                 <!-- Session Usage -->
                 <div class="usage-block primary-usage-block">
                     <span class="usage-label usage-block-label">Current Session</span>

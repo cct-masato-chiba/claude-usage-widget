@@ -47,6 +47,14 @@ const elements = {
     currentDateTime: document.getElementById('currentDateTime'),
     currentDateLine: document.getElementById('currentDateLine'),
     currentTimeLine: document.getElementById('currentTimeLine'),
+    batteryIndicator: document.getElementById('batteryIndicator'),
+    batteryFill: document.getElementById('batteryFill'),
+    batteryText: document.getElementById('batteryText'),
+    systemRow: document.getElementById('systemRow'),
+    cpuFill: document.getElementById('cpuFill'),
+    cpuPct: document.getElementById('cpuPct'),
+    ramFill: document.getElementById('ramFill'),
+    ramPct: document.getElementById('ramPct'),
 
     sessionPercentage: document.getElementById('sessionPercentage'),
     sessionProgress: document.getElementById('sessionProgress'),
@@ -146,6 +154,8 @@ async function handleOrgChange() {
 async function init() {
     setupEventListeners();
     startCurrentDateTime();
+    setupBattery();
+    setupSystemStats();
     credentials = await window.electronAPI.getCredentials();
 
     // Apply saved theme and load thresholds immediately
@@ -714,6 +724,7 @@ function refreshExtraTimers() {
 
 const BANNER_HEIGHT = 28;
 const EXPAND_OVERHEAD = 28; // margin-top(12) + padding-top(6) + bottom buffer(10)
+const SYSTEM_ROW_HEIGHT = 42; // CPU/RAM row + divider; only counted when it has data to show
 
 function resizeWidget(bannerVisible) {
     const hasBanner = bannerVisible !== undefined
@@ -725,7 +736,10 @@ function resizeWidget(bannerVisible) {
         ? EXPAND_OVERHEAD + (extraCount * WIDGET_ROW_HEIGHT)
         : 0;
     const graphOffset = graphVisible ? GRAPH_HEIGHT : 0;
-    const totalHeight = WIDGET_HEIGHT_COLLAPSED + expandedOffset + graphOffset + bannerOffset;
+    const systemOffset = elements.systemRow && elements.systemRow.style.display !== 'none'
+        ? SYSTEM_ROW_HEIGHT
+        : 0;
+    const totalHeight = WIDGET_HEIGHT_COLLAPSED + expandedOffset + graphOffset + bannerOffset + systemOffset;
     window.electronAPI.resizeWindow(totalHeight);
 }
 
@@ -1256,6 +1270,73 @@ function startCurrentDateTime() {
         clearInterval(currentDateTimeInterval);
     }
     currentDateTimeInterval = setInterval(updateCurrentDateTime, 1000);
+}
+
+// On WSL the main process pushes the Windows-side battery via IPC (Chromium's
+// battery API has no backend there); once that happens IPC data wins over
+// navigator.getBattery().
+let batteryFromMain = false;
+
+function renderBattery(info) {
+    if (!elements.batteryIndicator) return;
+    if (!info || !info.available) {
+        elements.batteryIndicator.style.display = 'none';
+        return;
+    }
+    const level = Math.max(0, Math.min(100, Math.round(info.level)));
+    elements.batteryIndicator.style.display = 'flex';
+    elements.batteryText.textContent = `${level}%`;
+    elements.batteryFill.style.width = `${level}%`;
+    elements.batteryIndicator.classList.toggle('charging', !!info.charging);
+    elements.batteryIndicator.classList.toggle('low', level <= 20 && !info.charging);
+}
+
+async function setupBattery() {
+    window.electronAPI.onBatteryStatus((info) => {
+        batteryFromMain = true;
+        renderBattery(info);
+    });
+
+    if (typeof navigator.getBattery !== 'function') return;
+    try {
+        const battery = await navigator.getBattery();
+        const update = () => {
+            if (batteryFromMain) return;
+            renderBattery({ available: true, level: battery.level * 100, charging: battery.charging });
+        };
+        battery.addEventListener('levelchange', update);
+        battery.addEventListener('chargingchange', update);
+        update();
+    } catch {
+        // No battery backend on this platform — indicator stays hidden
+    }
+}
+
+function setSysmeter(fillEl, pctEl, value) {
+    if (value === undefined || value === null) return;
+    const v = Math.max(0, Math.min(100, Math.round(value)));
+    fillEl.style.width = `${v}%`;
+    pctEl.textContent = `${v}%`;
+    fillEl.classList.toggle('warn', v >= 75 && v < 90);
+    fillEl.classList.toggle('danger', v >= 90);
+}
+
+function renderSysload(info) {
+    if (!elements.systemRow) return;
+    const wasHidden = elements.systemRow.style.display === 'none';
+    if (!info || !info.available) {
+        elements.systemRow.style.display = 'none';
+        if (!wasHidden && !isCompactMode) resizeWidget();
+        return;
+    }
+    setSysmeter(elements.cpuFill, elements.cpuPct, info.cpu);
+    setSysmeter(elements.ramFill, elements.ramPct, info.ram);
+    elements.systemRow.style.display = 'flex';
+    if (wasHidden && !isCompactMode) resizeWidget();
+}
+
+function setupSystemStats() {
+    window.electronAPI.onSysloadStatus(renderSysload);
 }
 
 function stopAutoUpdate() {

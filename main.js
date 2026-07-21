@@ -67,7 +67,7 @@ let sessionTray = null;  // Tray icon for Session usage
 let weeklyTray = null;   // Tray icon for Weekly usage
 
 const WIDGET_WIDTH = process.platform === 'darwin' ? 503 : 280;
-const WIDGET_HEIGHT = 176;
+const WIDGET_HEIGHT = 218; // includes the CPU/RAM system row + divider above the usage blocks
 const HISTORY_RETENTION_DAYS = 8;
 const CHART_DAYS = 7;
 const MAX_HISTORY_SAMPLES = 10000; // Cap total samples to prevent unbounded growth
@@ -190,6 +190,11 @@ function createMainWindow() {
   mainWindow.loadFile('src/renderer/index.html');
   mainWindow.once('ready-to-show', () => {
     enforceAlwaysOnTop(store.get('settings.alwaysOnTop', true));
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    // did-finish-load fires on every (re)load; push fresh readings immediately
+    // and start the timer once.
+    systemTimer ? pollSystem() : startSystemPolling();
   });
 
   let positionSaveTimer = null;
@@ -663,6 +668,97 @@ $h = [W]::Find('${WSL_TOPMOST_TITLE}')
 if ($h -ne [IntPtr]::Zero) { [W]::SetWindowPos($h, [IntPtr](-2), 0, 0, 0, 0, 0x13) | Out-Null }`;
   spawnPowershell(wslPsCommand(script), { stdio: 'ignore' });
   debugLog('WSL topmost enforcer stopped');
+}
+
+/*
+ * System stats (battery + CPU + RAM) reflect the Windows host, not the WSL VM.
+ *
+ * On WSL, Chromium's navigator.getBattery() has no backend (no UPower/sysfs) and
+ * Node's os.cpus()/os.freemem() report the Linux VM, which is meaningless for a
+ * desktop widget. So all three are read from the Windows host via a single
+ * PowerShell interop call (amortising the ~1s process-spawn cost) and pushed to
+ * the renderer. On native platforms battery comes from navigator.getBattery() in
+ * the renderer, and CPU/RAM come from the Node os module (real machine there).
+ */
+const SYSTEM_POLL_MS = 30 * 1000;
+let systemTimer = null;
+let prevCpuSample = null; // for the native os.cpus() delta
+
+function sendToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+// WSL path: one PS call returns "SYS <cpu> <ram> <battery>".
+// Win32_PerfFormattedData_PerfOS_Processor avoids Get-Counter's localised
+// counter names (e.g. Japanese Windows) and its extra sampling cost.
+function pollWslSystem() {
+  const script = `$os = Get-CimInstance Win32_OperatingSystem
+$c = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Where-Object { $_.Name -eq '_Total' }
+$cpu = if ($c) { [math]::Round($c.PercentProcessorTime) } else { -1 }
+$ram = [math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100)
+$bat = Get-CimInstance Win32_Battery | Select-Object -First 1
+$b = if ($bat) { "$($bat.EstimatedChargeRemaining) $($bat.BatteryStatus)" } else { "none" }
+Write-Output "SYS $cpu $ram $b"`;
+  const child = spawnPowershell(wslPsCommand(script), { stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.on('close', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const match = out.match(/^SYS (-?\d+) (\d+) (none|(\d+) (\d+))/m);
+    if (!match) return;
+
+    const cpu = Number(match[1]);
+    const ram = Number(match[2]);
+    const sysload = { available: true, ram };
+    if (cpu >= 0) sysload.cpu = cpu;
+    sendToRenderer('sysload-status', sysload);
+
+    if (match[3] === 'none') {
+      sendToRenderer('battery-status', { available: false });
+    } else {
+      const level = Number(match[4]);
+      const status = Number(match[5]);
+      // Win32_Battery.BatteryStatus: 1 = discharging, 4 = low, 5 = critical,
+      // 10 = undefined; everything else means on AC / charging
+      const charging = ![1, 4, 5, 10].includes(status);
+      sendToRenderer('battery-status', { available: true, level, charging });
+    }
+  });
+}
+
+// Native path: CPU% from the delta between two os.cpus() snapshots, RAM from
+// os.freemem/totalmem. Battery is handled by navigator.getBattery() in renderer.
+function cpuTimesTotal() {
+  let idle = 0, total = 0;
+  for (const c of os.cpus()) {
+    for (const t of Object.values(c.times)) total += t;
+    idle += c.times.idle;
+  }
+  return { idle, total };
+}
+
+function pollNativeSystem() {
+  const cur = cpuTimesTotal();
+  const sysload = { available: true, ram: Math.round((1 - os.freemem() / os.totalmem()) * 100) };
+  if (prevCpuSample) {
+    const idleDiff = cur.idle - prevCpuSample.idle;
+    const totalDiff = cur.total - prevCpuSample.total;
+    if (totalDiff > 0) sysload.cpu = Math.round(100 - (idleDiff / totalDiff) * 100);
+  }
+  prevCpuSample = cur;
+  sendToRenderer('sysload-status', sysload);
+}
+
+function pollSystem() {
+  isWsl ? pollWslSystem() : pollNativeSystem();
+}
+
+function startSystemPolling() {
+  if (systemTimer) return;
+  pollSystem();
+  systemTimer = setInterval(pollSystem, SYSTEM_POLL_MS);
 }
 
 function createTray() {
