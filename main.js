@@ -188,6 +188,9 @@ function createMainWindow() {
 
   mainWindow = new BrowserWindow(windowOptions);
   mainWindow.loadFile('src/renderer/index.html');
+  mainWindow.once('ready-to-show', () => {
+    enforceAlwaysOnTop(store.get('settings.alwaysOnTop', true));
+  });
 
   let positionSaveTimer = null;
   mainWindow.on('move', () => {
@@ -200,6 +203,12 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  mainWindow.on('blur', () => {
+    if (store.get('settings.alwaysOnTop', true)) {
+      setTimeout(() => enforceAlwaysOnTop(true), 50);
+    }
   });
 
   if (process.env.NODE_ENV === 'development') {
@@ -556,6 +565,104 @@ function showMainWindowClean() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  enforceAlwaysOnTop(store.get('settings.alwaysOnTop', true));
+}
+
+function enforceAlwaysOnTop(enabled) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (enabled) {
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.moveTop();
+  } else {
+    mainWindow.setAlwaysOnTop(false);
+  }
+  if (isWsl) {
+    enabled ? startWslTopmostEnforcer() : stopWslTopmostEnforcer();
+  }
+}
+
+/*
+ * WSLg limitation: windows are presented through RDP RAIL as regular Windows
+ * windows, and the X11 always-on-top hint (_NET_WM_STATE_ABOVE) is not
+ * translated to the Windows z-order. So the widget sinks below native Windows
+ * apps even with setAlwaysOnTop(true).
+ *
+ * Workaround: keep a persistent powershell.exe child process (WSL interop)
+ * that finds the widget's window by title on the Windows side and re-asserts
+ * HWND_TOPMOST via SetWindowPos every few seconds. TOPMOST is sticky, but the
+ * loop covers RAIL recreating the window (e.g. after hide/show).
+ */
+const WSL_TOPMOST_TITLE = 'Claude Usage Widget';
+let wslTopmostProc = null;
+
+function wslPsCommand(script) {
+  // -EncodedCommand sidesteps quoting issues across the WSL/Windows boundary
+  return ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
+    '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+}
+
+// WSLg presents the window with the distro name appended to the title
+// ("Claude Usage Widget (Ubuntu)"), so the lookup matches by prefix.
+const WSL_WIN32_TYPE = `
+Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class W {
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int cy, uint f);
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
+  public static IntPtr Find(string prefix) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      StringBuilder sb = new StringBuilder(256);
+      GetWindowText(h, sb, 256);
+      if (sb.ToString().StartsWith(prefix)) { found = h; return false; }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+}
+"@
+`;
+
+function spawnPowershell(args, opts) {
+  const { spawn } = require('child_process');
+  // Fixed path first: powershell.exe is not on PATH when appendWindowsPath=false
+  const fixed = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
+  const exe = fs.existsSync(fixed) ? fixed : 'powershell.exe';
+  const child = spawn(exe, args, opts);
+  child.on('error', (err) => debugLog('WSL topmost: powershell unavailable: ' + err.message));
+  return child;
+}
+
+function startWslTopmostEnforcer() {
+  if (wslTopmostProc) return;
+  // SWP flags 0x13 = NOSIZE | NOMOVE | NOACTIVATE
+  const script = `${WSL_WIN32_TYPE}
+while ($true) {
+  $h = [W]::Find('${WSL_TOPMOST_TITLE}')
+  if ($h -ne [IntPtr]::Zero) { [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x13) | Out-Null }
+  Start-Sleep -Seconds 3
+}`;
+  wslTopmostProc = spawnPowershell(wslPsCommand(script), { stdio: 'ignore' });
+  wslTopmostProc.on('exit', () => { wslTopmostProc = null; });
+  debugLog('WSL topmost enforcer started');
+}
+
+function stopWslTopmostEnforcer() {
+  if (wslTopmostProc) {
+    wslTopmostProc.removeAllListeners('exit');
+    wslTopmostProc.kill();
+    wslTopmostProc = null;
+  }
+  // One-shot: drop the sticky TOPMOST flag ([IntPtr](-2) = HWND_NOTOPMOST)
+  const script = `${WSL_WIN32_TYPE}
+$h = [W]::Find('${WSL_TOPMOST_TITLE}')
+if ($h -ne [IntPtr]::Zero) { [W]::SetWindowPos($h, [IntPtr](-2), 0, 0, 0, 0, 0x13) | Out-Null }`;
+  spawnPowershell(wslPsCommand(script), { stdio: 'ignore' });
+  debugLog('WSL topmost enforcer stopped');
 }
 
 function createTray() {
@@ -1070,7 +1177,7 @@ ipcMain.handle('save-settings', (event, settings) => {
     } else {
       mainWindow.setSkipTaskbar(settings.minimizeToTray);
     }
-    mainWindow.setAlwaysOnTop(settings.alwaysOnTop, 'floating');
+    enforceAlwaysOnTop(settings.alwaysOnTop);
   }
 
   if (!settings.showTrayStats) {
@@ -1409,7 +1516,7 @@ ipcMain.handle('fetch-usage-data', async (event, options = {}) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     const alwaysOnTop = store.get('settings.alwaysOnTop', true);
     if (alwaysOnTop) {
-      mainWindow.setAlwaysOnTop(true, 'floating');
+      enforceAlwaysOnTop(true);
     }
   }
 
@@ -1455,7 +1562,7 @@ app.whenReady().then(async () => {
     } else {
       if (minimizeToTray) mainWindow.setSkipTaskbar(true);
     }
-    mainWindow.setAlwaysOnTop(alwaysOnTop, 'floating');
+    enforceAlwaysOnTop(alwaysOnTop);
   }
 
   // Periodic always-on-top re-assertion to recover from z-order disruptions
@@ -1464,7 +1571,7 @@ app.whenReady().then(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const alwaysOnTopSetting = store.get('settings.alwaysOnTop', true);
       if (alwaysOnTopSetting) {
-        mainWindow.setAlwaysOnTop(true, 'floating');
+        enforceAlwaysOnTop(true);
       }
     }
   }, 5000);
@@ -1473,6 +1580,14 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     // Keep running in tray
+  }
+});
+
+app.on('quit', () => {
+  if (wslTopmostProc) {
+    wslTopmostProc.removeAllListeners('exit');
+    wslTopmostProc.kill();
+    wslTopmostProc = null;
   }
 });
 
