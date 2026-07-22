@@ -814,6 +814,20 @@ async function geocode(query) {
   return geo;
 }
 
+// Reverse-geocode the queried coordinates to a human address (for the tooltip),
+// via OpenStreetMap Nominatim. Cached by coord — we poll at most a few points
+// every 30 min, well within Nominatim's usage policy.
+const reverseGeoCache = new Map(); // "lat,lon" -> address string
+async function reverseGeocode(lat, lon) {
+  const key = `${lat},${lon}`;
+  if (reverseGeoCache.has(key)) return reverseGeoCache.get(key);
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&accept-language=ja`;
+  const data = await httpsGetJson(url);
+  const address = data && data.display_name ? data.display_name : null;
+  if (address) reverseGeoCache.set(key, address);
+  return address;
+}
+
 // "lat,lon" (e.g. "35.7295,139.7109") is used verbatim — bypasses geocoding so
 // exact spots survive Open-Meteo's imperfect place-name matching.
 function parseCoords(query) {
@@ -828,14 +842,31 @@ function parseCoords(query) {
 async function fetchWeatherFor(loc) {
   const geo = parseCoords(loc.query) || await geocode(loc.query);
   if (!geo) return null;
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,weather_code`;
+  // Whole day, hourly, in the location's local time so the 4-hour buckets align
+  // to local 0-4/4-8/… boundaries.
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&hourly=temperature_2m,weather_code&forecast_days=1&timezone=auto`;
   const data = await httpsGetJson(url);
-  if (!data || !data.current) return null;
-  return {
-    label: loc.label || geo.name,
-    temp: Math.round(data.current.temperature_2m),
-    code: data.current.weather_code
-  };
+  if (!data || !data.hourly) return null;
+  const { time, temperature_2m: temps, weather_code: codes } = data.hourly;
+
+  // Aggregate the 24 hourly samples into six 4-hour buckets.
+  // temp = hottest hour in the bucket; code = worst (highest WMO code) in it.
+  const buckets = [];
+  for (let start = 0; start < 24; start += 4) {
+    const t = [];
+    const c = [];
+    for (let i = 0; i < time.length; i++) {
+      const hour = Number(time[i].slice(11, 13)); // "YYYY-MM-DDTHH:MM" → HH
+      if (hour >= start && hour < start + 4) {
+        t.push(temps[i]);
+        c.push(codes[i]);
+      }
+    }
+    if (!t.length) continue;
+    buckets.push({ start, temp: Math.round(Math.max(...t)), code: Math.max(...c) });
+  }
+  const address = await reverseGeocode(geo.lat, geo.lon);
+  return { label: loc.label || geo.name, address, buckets };
 }
 
 async function pollWeather() {

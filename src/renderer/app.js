@@ -51,6 +51,7 @@ const elements = {
     batteryFill: document.getElementById('batteryFill'),
     batteryText: document.getElementById('batteryText'),
     weatherBlock: document.getElementById('weatherBlock'),
+    weatherTooltip: document.getElementById('weatherTooltip'),
     systemRow: document.getElementById('systemRow'),
     cpuFill: document.getElementById('cpuFill'),
     cpuPct: document.getElementById('cpuPct'),
@@ -730,6 +731,7 @@ function refreshExtraTimers() {
 const BANNER_HEIGHT = 28;
 const EXPAND_OVERHEAD = 28; // margin-top(12) + padding-top(6) + bottom buffer(10)
 const SYSTEM_ROW_HEIGHT = 42; // CPU/RAM row + divider; only counted when it has data to show
+const WEATHER_HEIGHT = 66; // day forecast block (label + hour/icon/temp rows); counted when shown
 
 function resizeWidget(bannerVisible) {
     const hasBanner = bannerVisible !== undefined
@@ -744,7 +746,10 @@ function resizeWidget(bannerVisible) {
     const systemOffset = elements.systemRow && elements.systemRow.style.display !== 'none'
         ? SYSTEM_ROW_HEIGHT
         : 0;
-    const totalHeight = WIDGET_HEIGHT_COLLAPSED + expandedOffset + graphOffset + bannerOffset + systemOffset;
+    const weatherOffset = elements.weatherBlock && elements.weatherBlock.style.display !== 'none'
+        ? WEATHER_HEIGHT
+        : 0;
+    const totalHeight = WIDGET_HEIGHT_COLLAPSED + expandedOffset + graphOffset + bannerOffset + systemOffset + weatherOffset;
     window.electronAPI.resizeWindow(totalHeight);
 }
 
@@ -1332,20 +1337,88 @@ function weatherEmoji(code) {
     return '🌡️';
 }
 
+// WMO weather code → Japanese text (for the tooltip; no icons there)
+function weatherText(code) {
+    if (code === 0) return '快晴';
+    if (code === 1) return '晴れ';
+    if (code === 2) return '晴れ時々曇り';
+    if (code === 3) return '曇り';
+    if (code === 45 || code === 48) return '霧';
+    if (code >= 51 && code <= 55) return '霧雨';
+    if (code === 56 || code === 57) return '着氷性の霧雨';
+    if (code >= 61 && code <= 65) return '雨';
+    if (code === 66 || code === 67) return '着氷性の雨';
+    if ((code >= 71 && code <= 75) || code === 77) return '雪';
+    if (code >= 80 && code <= 82) return 'にわか雨';
+    if (code === 85 || code === 86) return 'にわか雪';
+    if (code === 95) return '雷雨';
+    if (code === 96 || code === 99) return '雷雨（雹）';
+    return '―';
+}
+
+// In-page tooltip HTML for a location: label + address + 24h in 4-hour rows
+// (text weather, no icons). Rendered inside the widget so it overlays on top —
+// native title tooltips render behind the always-on-top window on WSLg.
+function buildWeatherTooltip(w) {
+    const rows = (w.buckets || []).map((b) => {
+        const hh = String(b.start).padStart(2, '0');
+        const ee = String(b.start + 4).padStart(2, '0');
+        return `<div class="wt-row">
+            <span class="wt-time">${hh}-${ee}</span>
+            <span class="wt-cond">${escapeHtml(weatherText(b.code))}</span>
+            <span class="wt-deg">${Math.round(b.temp)}°</span>
+        </div>`;
+    }).join('');
+    const addr = w.address ? `<div class="wt-addr">${escapeHtml(w.address)}</div>` : '';
+    return `<div class="wt-title">${escapeHtml(w.label)}</div>${addr}<div class="wt-rows">${rows}</div>`;
+}
+
+function showWeatherTooltip(w) {
+    const tip = elements.weatherTooltip;
+    if (!tip) return;
+    tip.innerHTML = buildWeatherTooltip(w);
+    // Overlay starting at the forecast strip (covering it downward) so the whole
+    // tooltip stays within the fixed-size window instead of clipping off the bottom
+    tip.style.top = `${elements.weatherBlock.offsetTop}px`;
+    tip.style.display = 'block';
+}
+
+function hideWeatherTooltip() {
+    if (elements.weatherTooltip) elements.weatherTooltip.style.display = 'none';
+}
+
 function renderWeather(list) {
     if (!elements.weatherBlock) return;
+    hideWeatherTooltip();
+    const wasHidden = elements.weatherBlock.style.display === 'none';
     if (!Array.isArray(list) || list.length === 0) {
         elements.weatherBlock.style.display = 'none';
         elements.weatherBlock.innerHTML = '';
+        if (!wasHidden && !isCompactMode) resizeWidget();
         return;
     }
-    elements.weatherBlock.innerHTML = list.map((w) => `
-        <div class="weather-entry">
-            <span class="weather-loc-name">${escapeHtml(w.label)}</span>
-            <span class="weather-icon">${weatherEmoji(w.code)}</span>
-            <span class="weather-temp">${Math.round(w.temp)}°</span>
-        </div>`).join('');
+    const currentBucketStart = Math.floor(new Date().getHours() / 4) * 4;
+    elements.weatherBlock.innerHTML = list.map((w) => {
+        const cols = (w.buckets || []).map((b) => `
+            <div class="wf-col${b.start === currentBucketStart ? ' current' : ''}">
+                <span class="wf-hour">${b.start}</span>
+                <span class="wf-icon">${weatherEmoji(b.code)}</span>
+                <span class="wf-temp">${Math.round(b.temp)}°</span>
+            </div>`).join('');
+        return `
+        <div class="weather-loc-panel">
+            <div class="weather-loc-name">${escapeHtml(w.label)}</div>
+            <div class="weather-forecast">${cols}</div>
+        </div>`;
+    }).join('');
+    // Wire hover → in-page tooltip, pairing each panel with its data
+    const panels = elements.weatherBlock.querySelectorAll('.weather-loc-panel');
+    panels.forEach((panel, i) => {
+        panel.addEventListener('mouseenter', () => showWeatherTooltip(list[i]));
+        panel.addEventListener('mouseleave', hideWeatherTooltip);
+    });
     elements.weatherBlock.style.display = 'flex';
+    if (wasHidden && !isCompactMode) resizeWidget();
 }
 
 function setSysmeter(fillEl, pctEl, value) {
