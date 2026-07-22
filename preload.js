@@ -43,6 +43,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSessionExpired: (callback) => {
     ipcRenderer.on('session-expired', () => callback());
   },
+  onBatteryStatus: (callback) => {
+    ipcRenderer.on('battery-status', (event, info) => callback(info));
+  },
+  onSysloadStatus: (callback) => {
+    ipcRenderer.on('sysload-status', (event, info) => callback(info));
+  },
+  onWeatherStatus: (callback) => {
+    ipcRenderer.on('weather-status', (event, list) => callback(list));
+  },
 
   // API
   fetchUsageData: () => ipcRenderer.invoke('fetch-usage-data'),
@@ -58,6 +67,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform
   platform: process.platform,
   isPortable: process.platform === 'win32' && !!process.env.PORTABLE_EXECUTABLE_FILE,
+  // require('os') is unavailable in the sandboxed preload — rely on the env var,
+  // which is always set inside WSL.
+  isWsl: process.platform === 'linux' && Boolean(process.env.WSL_DISTRO_NAME),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),

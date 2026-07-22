@@ -7,6 +7,16 @@ const { fetchViaWindow, fetchMultipleViaWindow } = require('./src/fetch-via-wind
 const GITHUB_OWNER = 'SlavomirDurej';
 const GITHUB_REPO = 'claude-usage-widget';
 
+const isWsl = process.platform === 'linux' &&
+  (require('os').release().toLowerCase().includes('microsoft') || Boolean(process.env.WSL_DISTRO_NAME));
+
+// WSL's virtual GPU (dxgkrnl/D3D12) corrupts composited frames — windows render
+// with an X-cross artifact. Software rendering avoids it. Transparency is also
+// unsupported by WSLg, so the window falls back to opaque there.
+if (isWsl) {
+  app.disableHardwareAcceleration();
+}
+
 // Migration: Handle old encrypted config files from v1.7.0 and earlier
 // Must happen BEFORE creating Store instance to prevent parse errors
 const fs = require('fs');
@@ -56,8 +66,8 @@ let mainWindow = null;
 let sessionTray = null;  // Tray icon for Session usage
 let weeklyTray = null;   // Tray icon for Weekly usage
 
-const WIDGET_WIDTH = process.platform === 'darwin' ? 590 : 560;
-const WIDGET_HEIGHT = 155;
+const WIDGET_WIDTH = process.platform === 'darwin' ? 503 : 280;
+const WIDGET_HEIGHT = 198; // includes the CPU/RAM system row + divider above the usage blocks
 const HISTORY_RETENTION_DAYS = 8;
 const CHART_DAYS = 7;
 const MAX_HISTORY_SAMPLES = 10000; // Cap total samples to prevent unbounded growth
@@ -158,7 +168,8 @@ function createMainWindow() {
     width: WIDGET_WIDTH,
     height: WIDGET_HEIGHT,
     frame: false,
-    transparent: true,
+    transparent: process.platform !== 'win32' && !isWsl,
+    backgroundColor: '#1e1e2e',
     alwaysOnTop: true,
     resizable: false,
     skipTaskbar: false,
@@ -177,6 +188,15 @@ function createMainWindow() {
 
   mainWindow = new BrowserWindow(windowOptions);
   mainWindow.loadFile('src/renderer/index.html');
+  mainWindow.once('ready-to-show', () => {
+    enforceAlwaysOnTop(store.get('settings.alwaysOnTop', true));
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    // did-finish-load fires on every (re)load; push fresh readings immediately
+    // and start the timers once.
+    systemTimer ? pollSystem() : startSystemPolling();
+    weatherTimer ? pollWeather() : startWeatherPolling();
+  });
 
   let positionSaveTimer = null;
   mainWindow.on('move', () => {
@@ -190,6 +210,16 @@ function createMainWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // On WSL the PowerShell SetWindowPos enforcer keeps the window topmost without
+  // the flicker that setAlwaysOnTop causes on RAIL, so skip this re-assertion.
+  if (!isWsl) {
+    mainWindow.on('blur', () => {
+      if (store.get('settings.alwaysOnTop', true)) {
+        setTimeout(() => enforceAlwaysOnTop(true), 50);
+      }
+    });
+  }
 
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -545,6 +575,326 @@ function showMainWindowClean() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  enforceAlwaysOnTop(store.get('settings.alwaysOnTop', true));
+}
+
+// WSL topmost workaround. On current WSLg (msrdc) SetWindowPos(HWND_TOPMOST) no
+// longer makes WS_EX_TOPMOST stick on the RAIL proxy window, BUT its z-order
+// raise still works — so re-asserting periodically keeps the widget visible on
+// top. Without it the window sinks behind others and disappears. The cost is a
+// flicker on each raise (a RAIL round-trip); on this WSLg visibility and
+// no-flicker can't both be had. Native Windows uses setAlwaysOnTop and has
+// neither problem. Set false to trade away visibility for no flicker on WSL.
+const WSL_TOPMOST_WORKAROUND_ENABLED = true;
+
+function enforceAlwaysOnTop(enabled) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (enabled) {
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.moveTop();
+  } else {
+    mainWindow.setAlwaysOnTop(false);
+  }
+  if (isWsl && WSL_TOPMOST_WORKAROUND_ENABLED) {
+    enabled ? startWslTopmostEnforcer() : stopWslTopmostEnforcer();
+  }
+}
+
+/*
+ * WSLg limitation: windows are presented through RDP RAIL as regular Windows
+ * windows, and the X11 always-on-top hint (_NET_WM_STATE_ABOVE) is not
+ * translated to the Windows z-order. So the widget sinks below native Windows
+ * apps even with setAlwaysOnTop(true).
+ *
+ * Workaround (toggle via WSL_TOPMOST_WORKAROUND_ENABLED): keep a persistent
+ * powershell.exe child that re-asserts HWND_TOPMOST via SetWindowPos.
+ */
+const WSL_TOPMOST_TITLE = 'Claude Usage Widget';
+let wslTopmostProc = null;
+
+function wslPsCommand(script) {
+  // -EncodedCommand sidesteps quoting issues across the WSL/Windows boundary
+  return ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
+    '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+}
+
+// WSLg presents the window with the distro name appended to the title
+// ("Claude Usage Widget (Ubuntu)"). The handle is looked up with Get-Process's
+// MainWindowHandle (below) rather than EnumWindows + GetWindowText — GetWindowText
+// returns empty for RAIL proxy windows, so the enumeration approach finds nothing.
+const WSL_WIN32_TYPE = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class W {
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int cy, uint f);
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int idx);
+}
+"@
+function Find-WidgetHwnd {
+  $p = Get-Process | Where-Object { $_.MainWindowTitle -like '${WSL_TOPMOST_TITLE}*' } | Select-Object -First 1
+  if ($p) { return $p.MainWindowHandle } else { return [IntPtr]::Zero }
+}
+`;
+
+function spawnPowershell(args, opts) {
+  const { spawn } = require('child_process');
+  // Fixed path first: powershell.exe is not on PATH when appendWindowsPath=false
+  const fixed = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
+  const exe = fs.existsSync(fixed) ? fixed : 'powershell.exe';
+  const child = spawn(exe, args, opts);
+  child.on('error', (err) => debugLog('WSL topmost: powershell unavailable: ' + err.message));
+  return child;
+}
+
+function startWslTopmostEnforcer() {
+  if (wslTopmostProc) return;
+  // HWND_TOPMOST is sticky, so only re-assert when the window has actually lost
+  // it (GWL_EXSTYLE -20 lacks WS_EX_TOPMOST 0x8). Re-asserting unconditionally
+  // re-layers the RAIL window every tick, which WSLg renders as a flicker and
+  // which also dismisses native tooltips mid-hover. The read-only GetWindowLong
+  // check has no visual effect. SWP flags 0x13 = NOSIZE | NOMOVE | NOACTIVATE.
+  const script = `${WSL_WIN32_TYPE}
+while ($true) {
+  $h = Find-WidgetHwnd
+  if ($h -ne [IntPtr]::Zero) {
+    $ex = [W]::GetWindowLong($h, -20)
+    if (($ex -band 0x8) -eq 0) { [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x13) | Out-Null }
+  }
+  Start-Sleep -Seconds 2
+}`;
+  wslTopmostProc = spawnPowershell(wslPsCommand(script), { stdio: 'ignore' });
+  wslTopmostProc.on('exit', () => { wslTopmostProc = null; });
+  debugLog('WSL topmost enforcer started');
+}
+
+function stopWslTopmostEnforcer() {
+  if (wslTopmostProc) {
+    wslTopmostProc.removeAllListeners('exit');
+    wslTopmostProc.kill();
+    wslTopmostProc = null;
+  }
+  // One-shot: drop the sticky TOPMOST flag ([IntPtr](-2) = HWND_NOTOPMOST)
+  const script = `${WSL_WIN32_TYPE}
+$h = Find-WidgetHwnd
+if ($h -ne [IntPtr]::Zero) { [W]::SetWindowPos($h, [IntPtr](-2), 0, 0, 0, 0, 0x13) | Out-Null }`;
+  spawnPowershell(wslPsCommand(script), { stdio: 'ignore' });
+  debugLog('WSL topmost enforcer stopped');
+}
+
+/*
+ * System stats (battery + CPU + RAM) reflect the Windows host, not the WSL VM.
+ *
+ * On WSL, Chromium's navigator.getBattery() has no backend (no UPower/sysfs) and
+ * Node's os.cpus()/os.freemem() report the Linux VM, which is meaningless for a
+ * desktop widget. So all three are read from the Windows host via a single
+ * PowerShell interop call (amortising the ~1s process-spawn cost) and pushed to
+ * the renderer. On native platforms battery comes from navigator.getBattery() in
+ * the renderer, and CPU/RAM come from the Node os module (real machine there).
+ */
+const SYSTEM_POLL_MS = 30 * 1000;
+let systemTimer = null;
+let prevCpuSample = null; // for the native os.cpus() delta
+
+function sendToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+// WSL path: one PS call returns "SYS <cpu> <ram> <battery>". Uses CIM perf
+// classes (not Get-Counter, which has localised counter names on e.g. Japanese
+// Windows) and matches Task Manager's numbers:
+//   CPU = Processor Information \ % Processor Utility (frequency-scaled, what
+//         Task Manager shows; can exceed 100 under turbo, so clamp). Falls back
+//         to PerfOS_Processor \ % Processor Time on older Windows lacking it.
+//   RAM = (Total - AvailableMBytes) — AvailableMBytes counts standby cache as
+//         free, matching Task Manager's "available"; FreePhysicalMemory doesn't.
+function pollWslSystem() {
+  const script = `$os = Get-CimInstance Win32_OperatingSystem
+$pi = Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq '_Total' }
+if ($pi) {
+  $cpu = [math]::Min(100, [math]::Round($pi.PercentProcessorUtility))
+} else {
+  $c = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Where-Object { $_.Name -eq '_Total' }
+  $cpu = if ($c) { [math]::Round($c.PercentProcessorTime) } else { -1 }
+}
+$m = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory
+$totalMB = $os.TotalVisibleMemorySize / 1024
+$ram = if ($m -and $totalMB -gt 0) { [math]::Round((($totalMB - $m.AvailableMBytes) / $totalMB) * 100) } else { -1 }
+$bat = Get-CimInstance Win32_Battery | Select-Object -First 1
+$b = if ($bat) { "$($bat.EstimatedChargeRemaining) $($bat.BatteryStatus)" } else { "none" }
+Write-Output "SYS $cpu $ram $b"`;
+  const child = spawnPowershell(wslPsCommand(script), { stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.on('close', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const match = out.match(/^SYS (-?\d+) (-?\d+) (none|(\d+) (\d+))/m);
+    if (!match) return;
+
+    const cpu = Number(match[1]);
+    const ram = Number(match[2]);
+    const sysload = { available: true };
+    if (cpu >= 0) sysload.cpu = cpu;
+    if (ram >= 0) sysload.ram = ram;
+    sendToRenderer('sysload-status', sysload);
+
+    if (match[3] === 'none') {
+      sendToRenderer('battery-status', { available: false });
+    } else {
+      const level = Number(match[4]);
+      const status = Number(match[5]);
+      // Win32_Battery.BatteryStatus: 1 = discharging, 4 = low, 5 = critical,
+      // 10 = undefined; everything else means on AC / charging
+      const charging = ![1, 4, 5, 10].includes(status);
+      sendToRenderer('battery-status', { available: true, level, charging });
+    }
+  });
+}
+
+// Native path: CPU% from the delta between two os.cpus() snapshots, RAM from
+// os.freemem/totalmem. Battery is handled by navigator.getBattery() in renderer.
+function cpuTimesTotal() {
+  let idle = 0, total = 0;
+  for (const c of os.cpus()) {
+    for (const t of Object.values(c.times)) total += t;
+    idle += c.times.idle;
+  }
+  return { idle, total };
+}
+
+function pollNativeSystem() {
+  const cur = cpuTimesTotal();
+  const sysload = { available: true, ram: Math.round((1 - os.freemem() / os.totalmem()) * 100) };
+  if (prevCpuSample) {
+    const idleDiff = cur.idle - prevCpuSample.idle;
+    const totalDiff = cur.total - prevCpuSample.total;
+    if (totalDiff > 0) sysload.cpu = Math.round(100 - (idleDiff / totalDiff) * 100);
+  }
+  prevCpuSample = cur;
+  sendToRenderer('sysload-status', sysload);
+}
+
+function pollSystem() {
+  isWsl ? pollWslSystem() : pollNativeSystem();
+}
+
+function startSystemPolling() {
+  if (systemTimer) return;
+  pollSystem();
+  systemTimer = setInterval(pollSystem, SYSTEM_POLL_MS);
+}
+
+/*
+ * Weather comes from Open-Meteo (free, no API key). The main process geocodes
+ * each configured location name to coordinates once (cached), then polls the
+ * current-conditions endpoint. Runs on every platform.
+ */
+const WEATHER_POLL_MS = 30 * 60 * 1000;
+let weatherTimer = null;
+const geoCache = new Map(); // location query -> { lat, lon, name }
+
+function httpsGetJson(url) {
+  return new Promise((resolve) => {
+    const req = https.request(url, { method: 'GET', timeout: 5000, headers: { 'User-Agent': 'claude-usage-widget' } }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+async function geocode(query) {
+  if (geoCache.has(query)) return geoCache.get(query);
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=ja&format=json`;
+  const data = await httpsGetJson(url);
+  const r = data && data.results && data.results[0];
+  if (!r) return null;
+  const geo = { lat: r.latitude, lon: r.longitude, name: r.name };
+  geoCache.set(query, geo);
+  return geo;
+}
+
+// Reverse-geocode the queried coordinates to a human address (for the tooltip),
+// via OpenStreetMap Nominatim. Cached by coord — we poll at most a few points
+// every 30 min, well within Nominatim's usage policy.
+const reverseGeoCache = new Map(); // "lat,lon" -> address string
+async function reverseGeocode(lat, lon) {
+  const key = `${lat},${lon}`;
+  if (reverseGeoCache.has(key)) return reverseGeoCache.get(key);
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&accept-language=ja`;
+  const data = await httpsGetJson(url);
+  const address = data && data.display_name ? data.display_name : null;
+  if (address) reverseGeoCache.set(key, address);
+  return address;
+}
+
+// "lat,lon" (e.g. "35.7295,139.7109") is used verbatim — bypasses geocoding so
+// exact spots survive Open-Meteo's imperfect place-name matching.
+function parseCoords(query) {
+  const m = query.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (!m) return null;
+  const lat = Number(m[1]);
+  const lon = Number(m[2]);
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon, name: query };
+}
+
+async function fetchWeatherFor(loc) {
+  const geo = parseCoords(loc.query) || await geocode(loc.query);
+  if (!geo) return null;
+  // Whole day, hourly, in the location's local time so the 4-hour buckets align
+  // to local 0-4/4-8/… boundaries.
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&hourly=temperature_2m,weather_code&forecast_days=1&timezone=auto`;
+  const data = await httpsGetJson(url);
+  if (!data || !data.hourly) return null;
+  const { time, temperature_2m: temps, weather_code: codes } = data.hourly;
+
+  // Aggregate the 24 hourly samples into six 4-hour buckets.
+  // temp = hottest hour in the bucket; code = worst (highest WMO code) in it.
+  const buckets = [];
+  for (let start = 0; start < 24; start += 4) {
+    const t = [];
+    const c = [];
+    for (let i = 0; i < time.length; i++) {
+      const hour = Number(time[i].slice(11, 13)); // "YYYY-MM-DDTHH:MM" → HH
+      if (hour >= start && hour < start + 4) {
+        t.push(temps[i]);
+        c.push(codes[i]);
+      }
+    }
+    if (!t.length) continue;
+    buckets.push({ start, temp: Math.round(Math.max(...t)), code: Math.max(...c) });
+  }
+  const address = await reverseGeocode(geo.lat, geo.lon);
+  return { label: loc.label || geo.name, address, buckets };
+}
+
+async function pollWeather() {
+  const locations = store.get('settings.weatherLocations', []);
+  const results = [];
+  for (const loc of locations) {
+    if (!loc || !loc.query) continue;
+    try {
+      const w = await fetchWeatherFor(loc);
+      if (w) results.push(w);
+    } catch (err) {
+      debugLog('Weather fetch failed for', loc.query, err.message);
+    }
+  }
+  sendToRenderer('weather-status', results);
+}
+
+function startWeatherPolling() {
+  if (weatherTimer) clearInterval(weatherTimer);
+  pollWeather();
+  weatherTimer = setInterval(pollWeather, WEATHER_POLL_MS);
 }
 
 function createTray() {
@@ -1017,7 +1367,8 @@ ipcMain.handle('get-settings', () => {
     refreshInterval: store.get('settings.refreshInterval', '300'),
     graphVisible: store.get('settings.graphVisible', false),
     expandedOpen: store.get('settings.expandedOpen', false),
-    showTrayStats: store.get('settings.showTrayStats', false)
+    showTrayStats: store.get('settings.showTrayStats', false),
+    weatherLocations: store.get('settings.weatherLocations', [])
   };
 });
 
@@ -1040,6 +1391,13 @@ ipcMain.handle('save-settings', (event, settings) => {
   store.set('settings.expandedOpen', settings.expandedOpen);
   store.set('settings.showTrayStats', settings.showTrayStats);
 
+  // Weather locations may have changed — refetch immediately (also picks up new
+  // geocoding for any changed location query)
+  if (Array.isArray(settings.weatherLocations)) {
+    store.set('settings.weatherLocations', settings.weatherLocations);
+    startWeatherPolling();
+  }
+
   const isPortable = process.platform === 'win32' && !!process.env.PORTABLE_EXECUTABLE_FILE;
 
   // openAtLogin is not supported on Linux — Electron silently ignores it.
@@ -1059,7 +1417,7 @@ ipcMain.handle('save-settings', (event, settings) => {
     } else {
       mainWindow.setSkipTaskbar(settings.minimizeToTray);
     }
-    mainWindow.setAlwaysOnTop(settings.alwaysOnTop, 'floating');
+    enforceAlwaysOnTop(settings.alwaysOnTop);
   }
 
   if (!settings.showTrayStats) {
@@ -1398,7 +1756,7 @@ ipcMain.handle('fetch-usage-data', async (event, options = {}) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     const alwaysOnTop = store.get('settings.alwaysOnTop', true);
     if (alwaysOnTop) {
-      mainWindow.setAlwaysOnTop(true, 'floating');
+      enforceAlwaysOnTop(true);
     }
   }
 
@@ -1444,24 +1802,38 @@ app.whenReady().then(async () => {
     } else {
       if (minimizeToTray) mainWindow.setSkipTaskbar(true);
     }
-    mainWindow.setAlwaysOnTop(alwaysOnTop, 'floating');
+    enforceAlwaysOnTop(alwaysOnTop);
   }
 
   // Periodic always-on-top re-assertion to recover from z-order disruptions
   // (hidden window spawns, window manager shortcuts, alt-tab, etc.)
-  setInterval(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const alwaysOnTopSetting = store.get('settings.alwaysOnTop', true);
-      if (alwaysOnTopSetting) {
-        mainWindow.setAlwaysOnTop(true, 'floating');
+  //
+  // Skipped on WSL: setAlwaysOnTop re-layers the RAIL window every tick, which
+  // WSLg renders as a visible flicker. The PowerShell SetWindowPos enforcer keeps
+  // the window topmost non-disruptively there, so this loop is redundant on WSL.
+  if (!isWsl) {
+    setInterval(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const alwaysOnTopSetting = store.get('settings.alwaysOnTop', true);
+        if (alwaysOnTopSetting) {
+          enforceAlwaysOnTop(true);
+        }
       }
-    }
-  }, 5000);
+    }, 5000);
+  }
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     // Keep running in tray
+  }
+});
+
+app.on('quit', () => {
+  if (wslTopmostProc) {
+    wslTopmostProc.removeAllListeners('exit');
+    wslTopmostProc.kill();
+    wslTopmostProc = null;
   }
 });
 

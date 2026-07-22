@@ -115,66 +115,70 @@
 
             <!-- Main Content -->
             <div class="content" id="mainContent" style="display: none;">
+                <div class="current-datetime" id="currentDateTime">
+                    <div class="current-date-line" id="currentDateLine">----/--/-- (-)</div>
+                    <div class="current-time-line" id="currentTimeLine">--:--:--</div>
+                </div>
 
-                <!-- Compact toggle chevron — fixed position, does not move with expand -->
-                <button class="compact-collapse-btn" id="compactCollapseBtn" title="Compact mode" style="display: none;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-                </button>
+                <div class="battery-indicator" id="batteryIndicator" style="display: none;">
+                    <span class="battery-icon">
+                        <span class="battery-body"><span class="battery-fill" id="batteryFill"></span></span>
+                        <span class="battery-cap"></span>
+                    </span>
+                    <span class="battery-bolt">⚡</span>
+                    <span class="battery-text" id="batteryText">--%</span>
+                </div>
 
-                <!-- Column Headers -->
-                <div class="usage-headers">
-                    <span></span>
-                    <span class="col-header col-header-center">Session Used</span>
-                    <span class="col-header col-header-center">Elapsed</span>
-                    <span class="col-header col-header-center">Resets In</span>
-                    <span class="col-header col-header-center">Resets At</span>
+                <div class="weather-block" id="weatherBlock" style="display: none;"></div>
+
+                <!-- In-page weather tooltip (overlays widget content; native title
+                     tooltips render behind the always-on-top window on WSLg) -->
+                <div class="weather-tooltip" id="weatherTooltip" style="display: none;"></div>
+
+                <!-- System load (CPU / RAM), above the usage blocks -->
+                <div class="system-row" id="systemRow" style="display: none;">
+                    <div class="sysmeter">
+                        <span class="sysmeter-label">CPU</span>
+                        <div class="sysmeter-bar"><div class="sysmeter-fill" id="cpuFill" style="width: 0%"></div></div>
+                        <span class="sysmeter-pct" id="cpuPct">--%</span>
+                    </div>
+                    <div class="sysmeter">
+                        <span class="sysmeter-label">RAM</span>
+                        <div class="sysmeter-bar"><div class="sysmeter-fill" id="ramFill" style="width: 0%"></div></div>
+                        <span class="sysmeter-pct" id="ramPct">--%</span>
+                    </div>
                 </div>
 
                 <!-- Session Usage -->
-                <div class="usage-section">
-                    <span class="usage-label">Current Session</span>
-                    <div class="usage-bar-group">
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="sessionProgress" style="width: 0%"></div>
+                <div class="usage-block primary-usage-block">
+                    <span class="usage-label usage-block-label"><img class="claude-mark" src="../../assets/claude-mark.svg" alt="">Current Session</span>
+                    <div class="usage-section primary-usage-section">
+                        <div class="usage-bar-group">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="sessionProgress" style="width: 0%"></div>
+                            </div>
+                            <span class="usage-percentage" id="sessionPercentage">0%</span>
                         </div>
-                        <span class="usage-percentage" id="sessionPercentage">0%</span>
                     </div>
-                    <div class="usage-elapsed-group">
-                        <svg class="mini-timer" width="24" height="24" viewBox="0 0 24 24">
-                            <circle class="timer-bg" cx="12" cy="12" r="10" />
-                            <circle class="timer-progress" id="sessionTimer" cx="12" cy="12" r="10"
-                                style="stroke-dasharray: 63; stroke-dashoffset: 63" />
-                        </svg>
+                    <div class="usage-meta-line">
+                        <span class="timer-text usage-meta-text" id="sessionTimeText">Resets --.</span>
                     </div>
-                    <div class="timer-text" id="sessionTimeText">--:--</div>
-                    <div class="resets-at-text" id="sessionResetsAt">--</div>
                 </div>
 
                 <!-- Weekly Usage -->
-                <div class="usage-section">
-                    <span class="usage-label">Weekly Limit</span>
-                    <div class="usage-bar-group">
-                        <div class="progress-bar">
-                            <div class="progress-fill weekly" id="weeklyProgress" style="width: 0%"></div>
+                <div class="usage-block primary-usage-block">
+                    <span class="usage-label usage-block-label"><img class="claude-mark" src="../../assets/claude-mark.svg" alt="">Weekly Limit</span>
+                    <div class="usage-section primary-usage-section">
+                        <div class="usage-bar-group">
+                            <div class="progress-bar">
+                                <div class="progress-fill weekly" id="weeklyProgress" style="width: 0%"></div>
+                            </div>
+                            <span class="usage-percentage" id="weeklyPercentage">0%</span>
                         </div>
-                        <span class="usage-percentage" id="weeklyPercentage">0%</span>
                     </div>
-                    <div class="usage-elapsed-group">
-                        <svg class="mini-timer" width="24" height="24" viewBox="0 0 24 24">
-                            <circle class="timer-bg" cx="12" cy="12" r="10" />
-                            <circle class="timer-progress weekly" id="weeklyTimer" cx="12" cy="12" r="10"
-                                style="stroke-dasharray: 63; stroke-dashoffset: 63" />
-                        </svg>
+                    <div class="usage-meta-line">
+                        <span class="timer-text usage-meta-text" id="weeklyTimeText">Resets --.</span>
                     </div>
-                    <div class="timer-text" id="weeklyTimeText">--:--</div>
-                    <div class="resets-at-text" id="weeklyResetsAt">--</div>
-                </div>
-
-                <!-- Expand Toggle -->
-                <div class="expand-toggle" id="expandToggle">
-                    <svg class="expand-arrow" id="expandArrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                        <polyline points="6 9 12 15 18 9" />
-                    </svg>
                 </div>
 
                 <!-- Expandable Details -->
@@ -349,6 +353,19 @@
                                     <option value="120">Every 2 min</option>
                                     <option value="300" selected>Every 5 min</option>
                                 </select>
+                            </div>
+                        </div>
+
+                        <!-- Row 7: weather locations (up to 2) -->
+                        <div class="settings-row">
+                            <span class="settings-row-label">Weather locations</span>
+                            <div class="weather-loc-row">
+                                <input type="text" id="weatherLabel1" class="weather-loc-label" placeholder="Label" spellcheck="false" autocomplete="off">
+                                <input type="text" id="weatherQuery1" class="weather-loc-query" placeholder="City (e.g. Yokohama)" spellcheck="false" autocomplete="off">
+                            </div>
+                            <div class="weather-loc-row">
+                                <input type="text" id="weatherLabel2" class="weather-loc-label" placeholder="Label" spellcheck="false" autocomplete="off">
+                                <input type="text" id="weatherQuery2" class="weather-loc-query" placeholder="City (e.g. Tokyo)" spellcheck="false" autocomplete="off">
                             </div>
                         </div>
 

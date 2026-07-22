@@ -13,6 +13,12 @@
     src: url('../../assets/fonts/LibreBaskerville-Bold.ttf') format('truetype');
 }
 
+html {
+    width: 100%;
+    height: 100%;
+    background: #1e1e2e;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -22,9 +28,11 @@
 }
 
 body {
+    width: 100%;
+    height: 100%;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     overflow: hidden;
-    background: transparent;
+    background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
     -webkit-app-region: no-drag;
 }
 
@@ -34,6 +42,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
 }
 
 .widget-container {
@@ -45,15 +54,21 @@ body {
     border-radius: 10px;
     display: flex;
     flex-direction: column;
+    -webkit-app-region: drag;
+}
+
+/* WSL: CSS drag regions swallow mouse events but don't move the RAIL window, so
+   drag is handled in JS (setupManualDrag). Neutralise every drag region here. */
+body.wsl-drag * {
+    -webkit-app-region: no-drag !important;
 }
 
 /* Title Bar */
 .title-bar {
-    -webkit-app-region: drag;
     background: rgba(0, 0, 0, 0.3);
     padding: 8px 12px;
     padding-left: 6px;
-    display: flex;
+    display: none;
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -112,6 +127,18 @@ body {
 .close-btn:hover {
     background: #e74c3c;
     color: white;
+}
+
+button,
+input,
+select,
+textarea,
+a,
+canvas,
+.update-banner,
+.settings-overlay,
+.compact-settings-overlay {
+    -webkit-app-region: no-drag;
 }
 
 /* Loading State */
@@ -447,16 +474,315 @@ body {
 
 /* Main Content */
 .content {
-    padding: 16px 20px;
+    padding: 8px 4px 8px 14px;
     position: relative;
+}
+
+.current-datetime {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    color: #b8b8c8;
+    font-variant-numeric: tabular-nums;
+    margin: 0 0 0 12px;
+    white-space: nowrap;
+}
+
+.current-date-line {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1.15;
+}
+
+.current-time-line {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1.05;
+}
+
+/* Battery indicator — top-right, aligned with the date line */
+.battery-indicator {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #b8b8c8;
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.battery-icon {
+    display: flex;
+    align-items: center;
+}
+
+.battery-body {
+    display: block;
+    width: 18px;
+    height: 9px;
+    border: 1.5px solid currentColor;
+    border-radius: 2px;
+    padding: 1px;
+}
+
+.battery-fill {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: currentColor;
+    border-radius: 1px;
+    transition: width 0.3s ease;
+}
+
+.battery-cap {
+    display: block;
+    width: 2px;
+    height: 4px;
+    margin-left: 1px;
+    background: currentColor;
+    border-radius: 0 1px 1px 0;
+}
+
+.battery-bolt {
+    display: none;
+    font-size: 9px;
+    line-height: 1;
+}
+
+.battery-indicator.charging {
+    color: #22c55e;
+}
+
+.battery-indicator.charging .battery-bolt {
+    display: inline;
+}
+
+.battery-indicator.low {
+    color: #ef4444;
+}
+
+/* Weather — top-right, side by side under the battery indicator */
+/* Weather — full-width row below the date/time: home (left) | work (right),
+   each a 6-column 4-hour forecast for the whole day. */
+.weather-block {
+    display: flex;
+    flex-direction: row;
+    gap: 12px;
+    margin: 0 12px 6px 12px;
+    color: #b8b8c8;
+    font-variant-numeric: tabular-nums;
+}
+
+.weather-loc-panel {
+    flex: 1;
+    min-width: 0;
+    /* no-drag so hover events fire (drag regions swallow them) */
+    -webkit-app-region: no-drag;
+}
+
+/* In-page weather tooltip — overlays the widget content on hover */
+.weather-tooltip {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    z-index: 1000;
+    background: rgba(20, 20, 32, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    padding: 6px 9px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    color: #e6e6f0;
+    -webkit-app-region: no-drag;
+    pointer-events: none;
+}
+
+.wt-title {
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 1px;
+}
+
+.wt-addr {
+    font-size: 8px;
+    color: #9a9aac;
+    line-height: 1.2;
+    margin-bottom: 5px;
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.wt-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.wt-row {
+    display: grid;
+    grid-template-columns: 40px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+}
+
+.wt-time {
+    color: #9a9aac;
+}
+
+.wt-deg {
+    font-weight: 700;
+    text-align: right;
+}
+
+.weather-loc-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: #8a8a9a;
+    margin-bottom: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.weather-forecast {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 1px;
+}
+
+.wf-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 2px 0;
+    border-radius: 4px;
+    line-height: 1;
+}
+
+.wf-col.current {
+    background: rgba(124, 124, 240, 0.22);
+}
+
+.wf-hour {
+    font-size: 8px;
+    color: #6f6f80;
+}
+
+.wf-icon {
+    font-size: 12px;
+}
+
+.wf-temp {
+    font-size: 10px;
+    font-weight: 700;
+}
+
+/* System load row (CPU / RAM) — above the usage blocks, divider below */
+.system-row {
+    display: flex;
+    gap: 12px;
+    margin: 0 12px 12px 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sysmeter {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+}
+
+.sysmeter-label {
+    color: #8a8a9a;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.sysmeter-bar {
+    flex: 1;
+    min-width: 0;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.sysmeter-fill {
+    height: 100%;
+    width: 0%;
+    background: #7c7cf0;
+    border-radius: 3px;
+    transition: width 0.4s ease;
+}
+
+.sysmeter-fill.warn {
+    background: #f59e0b;
+}
+
+.sysmeter-fill.danger {
+    background: #ef4444;
+}
+
+.sysmeter-pct {
+    color: #b8b8c8;
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    min-width: 30px;
+    text-align: right;
+}
+
+/* Weather location settings inputs */
+.weather-loc-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.weather-loc-label {
+    width: 72px;
+    flex: 0 0 auto;
+}
+
+.weather-loc-query {
+    flex: 1;
+    min-width: 0;
+}
+
+.weather-loc-label,
+.weather-loc-query {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: inherit;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+
+.weather-loc-label:focus,
+.weather-loc-query:focus {
+    border-color: #7c7cf0;
 }
 
 /* Expand Toggle */
 .expand-toggle {
-    display: flex;
-    justify-content: center;
-    padding: 2px 0 0;
-    cursor: pointer;
+    display: none;
 }
 
 .expand-arrow {
@@ -550,11 +876,41 @@ body.theme-light .graph-btn.active {
     text-align: right;
 }
 
+.usage-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0 0 0 12px;
+    margin-top: -4px;
+}
+
+.primary-usage-block {
+    margin-bottom: 12px;
+}
+
+.usage-block-label {
+    font-size: 12px;
+    letter-spacing: 0.55px;
+    line-height: 1.05;
+    margin-bottom: -7px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.claude-mark {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+}
+
 /* Bar + percentage grouped */
 .usage-bar-group {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 2px;
+    min-width: 0;
+    width: 100%;
 }
 
 .usage-bar-group .progress-bar {
@@ -579,6 +935,39 @@ body.theme-light .graph-btn.active {
     white-space: nowrap;
 }
 
+.reset-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 1px;
+    min-width: 0;
+    transform: translateX(-10px);
+}
+
+.reset-stack-text {
+    width: auto;
+    line-height: 1.05;
+    text-align: right;
+}
+
+.usage-meta-line {
+    display: flex;
+    align-items: center;
+    margin-top: -7px;
+    margin-left: 0;
+    padding-left: 4px;
+}
+
+.usage-meta-line .usage-meta-text {
+    width: auto;
+    font-size: 11px;
+    line-height: 1.05;
+    text-align: left;
+    color: #a0a0a0;
+    font-weight: 600;
+}
+
 .usage-section:last-of-type {
     margin-bottom: 0;
 }
@@ -587,14 +976,14 @@ body.theme-light .graph-btn.active {
 
 
 /* We need to re-target the children of usage-header because display:contents strips the wrapper box */
-/* But the HTML structure is: 
+/* But the HTML structure is:
    .usage-section > .usage-header > span, span
    .usage-section > .progress-bar
    .usage-section > .timer-container
 */
-/* Actually, let's just make usage-header NOT display contents, but hide it or remove it in HTML? 
-   Better: make usage-section a Flex Row? 
-   Or keeps Grid: 
+/* Actually, let's just make usage-header NOT display contents, but hide it or remove it in HTML?
+   Better: make usage-section a Flex Row?
+   Or keeps Grid:
    Column 1: Label
    Column 2: Progress (flexible)
    Column 3: Percentage
@@ -610,11 +999,20 @@ body.theme-light .graph-btn.active {
     white-space: nowrap;
 }
 
+.primary-usage-section {
+    grid-template-columns: minmax(0, 1fr) 30px;
+    gap: 2px;
+    min-height: 24px;
+    padding: 0;
+    margin-bottom: 0;
+}
+
 .usage-percentage {
     color: #e0e0e0;
     font-size: 13px;
     font-weight: 700;
     text-align: right;
+    min-width: 24px;
 }
 
 /* Progress Bar */
@@ -687,13 +1085,6 @@ body.theme-light .graph-btn.active {
 
 
 /* Circle only — centered in its column */
-.usage-elapsed-group {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding-left: 8px;
-}
-
 /* Timer elements sit inside usage-timer-group flex container */
 .mini-timer {
     transform: rotate(-90deg);
@@ -747,7 +1138,7 @@ body.theme-light .graph-btn.active {
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     font-family: inherit;
-    text-align: center;
+    text-align: right;
     white-space: nowrap;
     width: 72px;
 }
@@ -1207,7 +1598,65 @@ body.theme-light .settings-title {
     color: #1a1a2e;
 }
 
+body.theme-light .current-datetime {
+    color: #4b5563;
+}
+
+body.theme-light .battery-indicator {
+    color: #4b5563;
+}
+
+body.theme-light .battery-indicator.charging {
+    color: #16a34a;
+}
+
+body.theme-light .battery-indicator.low {
+    color: #dc2626;
+}
+
+body.theme-light .weather-block {
+    color: #4b5563;
+}
+
+body.theme-light .weather-loc-name {
+    color: #6b7280;
+}
+
+body.theme-light .wf-hour {
+    color: #9ca3af;
+}
+
+body.theme-light .wf-col.current {
+    background: rgba(124, 124, 240, 0.16);
+}
+
+body.theme-light .sysmeter-label {
+    color: #6b7280;
+}
+
+body.theme-light .sysmeter-pct {
+    color: #4b5563;
+}
+
+body.theme-light .sysmeter-bar {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+body.theme-light .system-row {
+    border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+body.theme-light .weather-loc-label,
+body.theme-light .weather-loc-query {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
 body.theme-light .usage-label {
+    color: #606080;
+}
+
+body.theme-light .usage-meta-line .usage-meta-text {
     color: #606080;
 }
 
@@ -1384,25 +1833,11 @@ body.compact-mode .title {
 
 /* Collapse chevron — fixed position in content area, does not move when rows expand */
 .compact-collapse-btn {
-    position: absolute;
-    left: 2px;
-    top: 40px;  /* fixed offset within .content: centers on the two main rows */
-    width: 18px;
-    height: 36px;
-    background: none;
-    border: none;
-    color: #505050;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: color 0.2s;
-    padding: 0;
-    z-index: 5;
+    display: none !important;
 }
 
 .compact-collapse-btn:hover {
-    color: #a0a0a0;
+    display: none !important;
 }
 
 /* Compact content container */

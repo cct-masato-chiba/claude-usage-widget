@@ -2,6 +2,7 @@
 let credentials = null;
 let updateInterval = null;
 let countdownInterval = null;
+let currentDateTimeInterval = null;
 let latestUsageData = null;
 let isExpanded = false;
 let isCompactMode = false;
@@ -12,7 +13,7 @@ let graphWasVisible = false; // preserves graph state across compact mode toggle
 let appInitializing = true;  // suppresses _saveViewState during startup restore
 let isFetching = false;       // in-flight guard — prevents overlapping fetchUsageData calls
 const UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
-const WIDGET_HEIGHT_COLLAPSED = 155;
+const WIDGET_HEIGHT_COLLAPSED = 156;
 const WIDGET_ROW_HEIGHT = 30;
 const GRAPH_HEIGHT = 232;
 
@@ -43,22 +44,32 @@ const elements = {
     graphBtn: document.getElementById('graphBtn'),
     minimizeBtn: document.getElementById('minimizeBtn'),
     closeBtn: document.getElementById('closeBtn'),
+    currentDateTime: document.getElementById('currentDateTime'),
+    currentDateLine: document.getElementById('currentDateLine'),
+    currentTimeLine: document.getElementById('currentTimeLine'),
+    batteryIndicator: document.getElementById('batteryIndicator'),
+    batteryFill: document.getElementById('batteryFill'),
+    batteryText: document.getElementById('batteryText'),
+    weatherBlock: document.getElementById('weatherBlock'),
+    weatherTooltip: document.getElementById('weatherTooltip'),
+    systemRow: document.getElementById('systemRow'),
+    cpuFill: document.getElementById('cpuFill'),
+    cpuPct: document.getElementById('cpuPct'),
+    ramFill: document.getElementById('ramFill'),
+    ramPct: document.getElementById('ramPct'),
+    weatherLabel1: document.getElementById('weatherLabel1'),
+    weatherQuery1: document.getElementById('weatherQuery1'),
+    weatherLabel2: document.getElementById('weatherLabel2'),
+    weatherQuery2: document.getElementById('weatherQuery2'),
 
     sessionPercentage: document.getElementById('sessionPercentage'),
     sessionProgress: document.getElementById('sessionProgress'),
-    sessionTimer: document.getElementById('sessionTimer'),
     sessionTimeText: document.getElementById('sessionTimeText'),
 
     weeklyPercentage: document.getElementById('weeklyPercentage'),
     weeklyProgress: document.getElementById('weeklyProgress'),
-    weeklyTimer: document.getElementById('weeklyTimer'),
     weeklyTimeText: document.getElementById('weeklyTimeText'),
-    weeklyResetsAt: document.getElementById('weeklyResetsAt'),
 
-    sessionResetsAt: document.getElementById('sessionResetsAt'),
-
-    expandToggle: document.getElementById('expandToggle'),
-    expandArrow: document.getElementById('expandArrow'),
     expandSection: document.getElementById('expandSection'),
     extraRows: document.getElementById('extraRows'),
     graphSection: document.getElementById('graphSection'),
@@ -148,6 +159,10 @@ async function handleOrgChange() {
 // Initialize
 async function init() {
     setupEventListeners();
+    startCurrentDateTime();
+    setupBattery();
+    setupSystemStats();
+    setupManualDrag();
     credentials = await window.electronAPI.getCredentials();
 
     // Apply saved theme and load thresholds immediately
@@ -184,7 +199,6 @@ async function init() {
     // Restore expanded state
     if (settings.expandedOpen) {
         isExpanded = true;
-        elements.expandArrow.classList.add('expanded');
         elements.expandSection.style.display = 'block';
     }
 
@@ -270,33 +284,6 @@ function setupEventListeners() {
         window.electronAPI.closeWindow();
     });
 
-    // Expand/collapse toggle
-    elements.expandToggle.addEventListener('click', async () => {
-        const wasExpanded = isExpanded;
-        isExpanded = !isExpanded;
-        elements.expandArrow.classList.toggle('expanded', isExpanded);
-        elements.expandSection.style.display = isExpanded ? 'block' : 'none';
-        if (graphVisible) {
-            loadChart();
-        }
-        resizeWidget();
-        
-        // CRITICAL: Update expandedOpen setting IMMEDIATELY (no debounce) to prevent race condition
-        // If we wait for the debounced save, auto-refresh might fetch with stale expandedOpen=false
-        const settings = window._cachedSettings || await window.electronAPI.getSettings();
-        settings.expandedOpen = isExpanded;
-        window._cachedSettings = settings;
-        await window.electronAPI.saveSettings(settings);
-        
-        // Trigger immediate fetch if panel was just opened (collapsed → expanded)
-        // This ensures fresh overage/prepaid data is available when user expands the panel
-        // Pass forceExtended to bypass any cached setting and fetch extended data immediately
-        if (!wasExpanded && isExpanded) {
-            debugLog('[Conditional Polling] Panel expanded - triggering immediate fetch with extended data');
-            await fetchUsageData({ forceExtended: true });
-        }
-    });
-
     // Settings close
     elements.closeSettingsBtn.addEventListener('click', async () => {
         await saveSettings();
@@ -376,10 +363,12 @@ function setupEventListeners() {
     });
 
     // Compact mode — collapse chevron (normal → compact)
-    elements.compactCollapseBtn.addEventListener('click', async () => {
-        applyCompactMode(true);
-        await _saveCompactSetting(true);
-    });
+    if (elements.compactCollapseBtn) {
+        elements.compactCollapseBtn.addEventListener('click', async () => {
+            applyCompactMode(true);
+            await _saveCompactSetting(true);
+        });
+    }
 
     // Compact mode — expand chevron (compact → normal)
     elements.compactExpandBtn.addEventListener('click', async () => {
@@ -718,11 +707,8 @@ function buildExtraRows(data) {
         count++;
     }
 
-    // Hide toggle if no extra rows
-    elements.expandToggle.style.display = count > 0 ? 'flex' : 'none';
     if (count === 0 && isExpanded) {
         isExpanded = false;
-        elements.expandArrow.classList.remove('expanded');
         elements.expandSection.style.display = 'none';
     }
 
@@ -745,6 +731,8 @@ function refreshExtraTimers() {
 
 const BANNER_HEIGHT = 28;
 const EXPAND_OVERHEAD = 28; // margin-top(12) + padding-top(6) + bottom buffer(10)
+const SYSTEM_ROW_HEIGHT = 42; // CPU/RAM row + divider; only counted when it has data to show
+const WEATHER_HEIGHT = 56; // day forecast block (label + hour/icon/temp rows); counted when shown
 
 function resizeWidget(bannerVisible) {
     const hasBanner = bannerVisible !== undefined
@@ -756,7 +744,13 @@ function resizeWidget(bannerVisible) {
         ? EXPAND_OVERHEAD + (extraCount * WIDGET_ROW_HEIGHT)
         : 0;
     const graphOffset = graphVisible ? GRAPH_HEIGHT : 0;
-    const totalHeight = WIDGET_HEIGHT_COLLAPSED + expandedOffset + graphOffset + bannerOffset;
+    const systemOffset = elements.systemRow && elements.systemRow.style.display !== 'none'
+        ? SYSTEM_ROW_HEIGHT
+        : 0;
+    const weatherOffset = elements.weatherBlock && elements.weatherBlock.style.display !== 'none'
+        ? WEATHER_HEIGHT
+        : 0;
+    const totalHeight = WIDGET_HEIGHT_COLLAPSED + expandedOffset + graphOffset + bannerOffset + systemOffset + weatherOffset;
     window.electronAPI.resizeWindow(totalHeight);
 }
 
@@ -862,7 +856,6 @@ function applyCompactMode(compact) {
     // Collapse extra rows when entering compact — prevents stale isExpanded state
     if (compact && isExpanded) {
         isExpanded = false;
-        elements.expandArrow.classList.remove('expanded');
         elements.expandSection.style.display = 'none';
     }
 
@@ -1020,14 +1013,13 @@ function refreshTimers() {
         sessionUtilization
     );
 
-    updateTimer(
-        elements.sessionTimer,
-        elements.sessionTimeText,
-        sessionResetsAt,
-        5 * 60 // 5 hours in minutes
-    );
-    elements.sessionResetsAt.textContent = formatResetsAt(sessionResetsAt, false, timeFormat, weeklyDateFormat);
-    elements.sessionResetsAt.style.opacity = sessionResetsAt ? '1' : '0.4';
+    if (sessionResetsAt) {
+        elements.sessionTimeText.textContent = `Resets ${formatResetsAt(sessionResetsAt, false, timeFormat, weeklyDateFormat)}.`;
+        elements.sessionTimeText.style.opacity = '1';
+    } else {
+        elements.sessionTimeText.textContent = 'Resets --.';
+        elements.sessionTimeText.style.opacity = '0.4';
+    }
 
     // Weekly data
     const weeklyUtilization = latestUsageData.seven_day?.utilization || 0;
@@ -1054,14 +1046,13 @@ function refreshTimers() {
         true
     );
 
-    updateTimer(
-        elements.weeklyTimer,
-        elements.weeklyTimeText,
-        weeklyResetsAt,
-        7 * 24 * 60 // 7 days in minutes
-    );
-    elements.weeklyResetsAt.textContent = formatResetsAt(weeklyResetsAt, true, timeFormat, weeklyDateFormat);
-    elements.weeklyResetsAt.style.opacity = weeklyResetsAt ? '1' : '0.4';
+    if (weeklyResetsAt) {
+        elements.weeklyTimeText.textContent = `Resets ${formatResetsAt(weeklyResetsAt, true, timeFormat, weeklyDateFormat)}.`;
+        elements.weeklyTimeText.style.opacity = '1';
+    } else {
+        elements.weeklyTimeText.textContent = 'Resets --.';
+        elements.weeklyTimeText.style.opacity = '0.4';
+    }
 }
 
 function startCountdown() {
@@ -1128,7 +1119,9 @@ function updateTimer(timerElement, textElement, resetsAt, totalMinutes) {
         textElement.style.opacity = '0.4';
         textElement.style.fontSize = '10px';
         textElement.title = 'Starts when a message is sent';
-        timerElement.style.strokeDashoffset = 63;
+        if (timerElement) {
+            timerElement.style.strokeDashoffset = 63;
+        }
         return;
     }
 
@@ -1143,7 +1136,9 @@ function updateTimer(timerElement, textElement, resetsAt, totalMinutes) {
 
     if (diff <= 0) {
         textElement.textContent = 'Resetting...';
-        timerElement.style.strokeDashoffset = 0;
+        if (timerElement) {
+            timerElement.style.strokeDashoffset = 0;
+        }
         return;
     }
 
@@ -1171,14 +1166,18 @@ function updateTimer(timerElement, textElement, resetsAt, totalMinutes) {
     // Update circle (63 is ~2*pi*10)
     const circumference = 63;
     const offset = circumference - (elapsedPercentage / 100) * circumference;
-    timerElement.style.strokeDashoffset = offset;
+    if (timerElement) {
+        timerElement.style.strokeDashoffset = offset;
+    }
 
     // Update color based on remaining time
-    timerElement.classList.remove('warning', 'danger');
-    if (elapsedPercentage >= 90) {
-        timerElement.classList.add('danger');
-    } else if (elapsedPercentage >= 75) {
-        timerElement.classList.add('warning');
+    if (timerElement) {
+        timerElement.classList.remove('warning', 'danger');
+        if (elapsedPercentage >= 90) {
+            timerElement.classList.add('danger');
+        } else if (elapsedPercentage >= 75) {
+            timerElement.classList.add('warning');
+        }
     }
 }
 
@@ -1248,6 +1247,255 @@ function startAutoUpdate() {
         await fetchUsageData();
         if (elements.refreshBtn) elements.refreshBtn.classList.remove('spinning');
     }, intervalSecs * 1000);
+}
+
+function formatCurrentDateTime() {
+    const settings = window._cachedSettings || {};
+    const now = new Date();
+    const datePart = new Intl.DateTimeFormat('ja-JP-u-ca-gregory', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'short'
+    }).format(now);
+    const timePart = new Intl.DateTimeFormat('ja-JP', {
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: (settings.timeFormat || '12h') === '12h'
+    }).format(now);
+
+    return { datePart, timePart };
+}
+
+function updateCurrentDateTime() {
+    if (!elements.currentDateLine || !elements.currentTimeLine) return;
+    const { datePart, timePart } = formatCurrentDateTime();
+    elements.currentDateLine.textContent = datePart;
+    elements.currentTimeLine.textContent = timePart;
+}
+
+function startCurrentDateTime() {
+    updateCurrentDateTime();
+    if (currentDateTimeInterval) {
+        clearInterval(currentDateTimeInterval);
+    }
+    currentDateTimeInterval = setInterval(updateCurrentDateTime, 1000);
+}
+
+// On WSL the main process pushes the Windows-side battery via IPC (Chromium's
+// battery API has no backend there); once that happens IPC data wins over
+// navigator.getBattery().
+let batteryFromMain = false;
+
+function renderBattery(info) {
+    if (!elements.batteryIndicator) return;
+    if (!info || !info.available) {
+        elements.batteryIndicator.style.display = 'none';
+        return;
+    }
+    const level = Math.max(0, Math.min(100, Math.round(info.level)));
+    elements.batteryIndicator.style.display = 'flex';
+    elements.batteryText.textContent = `${level}%`;
+    elements.batteryFill.style.width = `${level}%`;
+    elements.batteryIndicator.classList.toggle('charging', !!info.charging);
+    elements.batteryIndicator.classList.toggle('low', level <= 20 && !info.charging);
+}
+
+async function setupBattery() {
+    window.electronAPI.onBatteryStatus((info) => {
+        batteryFromMain = true;
+        renderBattery(info);
+    });
+
+    if (typeof navigator.getBattery !== 'function') return;
+    try {
+        const battery = await navigator.getBattery();
+        const update = () => {
+            if (batteryFromMain) return;
+            renderBattery({ available: true, level: battery.level * 100, charging: battery.charging });
+        };
+        battery.addEventListener('levelchange', update);
+        battery.addEventListener('chargingchange', update);
+        update();
+    } catch {
+        // No battery backend on this platform — indicator stays hidden
+    }
+}
+
+// WMO weather code → emoji (Open-Meteo current.weather_code)
+function weatherEmoji(code) {
+    if (code === 0) return '☀️';
+    if (code === 1 || code === 2) return '⛅';
+    if (code === 3) return '☁️';
+    if (code === 45 || code === 48) return '🌫️';
+    if (code >= 51 && code <= 57) return '🌦️';
+    if (code >= 61 && code <= 67) return '🌧️';
+    if (code >= 71 && code <= 77) return '🌨️';
+    if (code >= 80 && code <= 82) return '🌧️';
+    if (code === 85 || code === 86) return '❄️';
+    if (code >= 95) return '⛈️';
+    return '🌡️';
+}
+
+// WMO weather code → Japanese text (for the tooltip; no icons there)
+function weatherText(code) {
+    if (code === 0) return '快晴';
+    if (code === 1) return '晴れ';
+    if (code === 2) return '晴れ時々曇り';
+    if (code === 3) return '曇り';
+    if (code === 45 || code === 48) return '霧';
+    if (code >= 51 && code <= 55) return '霧雨';
+    if (code === 56 || code === 57) return '着氷性の霧雨';
+    if (code >= 61 && code <= 65) return '雨';
+    if (code === 66 || code === 67) return '着氷性の雨';
+    if ((code >= 71 && code <= 75) || code === 77) return '雪';
+    if (code >= 80 && code <= 82) return 'にわか雨';
+    if (code === 85 || code === 86) return 'にわか雪';
+    if (code === 95) return '雷雨';
+    if (code === 96 || code === 99) return '雷雨（雹）';
+    return '―';
+}
+
+// In-page tooltip HTML for a location: label + address + 24h in 4-hour rows
+// (text weather, no icons). Rendered inside the widget so it overlays on top —
+// native title tooltips render behind the always-on-top window on WSLg.
+function buildWeatherTooltip(w) {
+    const rows = (w.buckets || []).map((b) => {
+        const hh = String(b.start).padStart(2, '0');
+        const ee = String(b.start + 4).padStart(2, '0');
+        return `<div class="wt-row">
+            <span class="wt-time">${hh}-${ee}</span>
+            <span class="wt-cond">${escapeHtml(weatherText(b.code))}</span>
+            <span class="wt-deg">${Math.round(b.temp)}°</span>
+        </div>`;
+    }).join('');
+    const addr = w.address ? `<div class="wt-addr">${escapeHtml(w.address)}</div>` : '';
+    return `<div class="wt-title">${escapeHtml(w.label)}</div>${addr}<div class="wt-rows">${rows}</div>`;
+}
+
+function showWeatherTooltip(w) {
+    const tip = elements.weatherTooltip;
+    if (!tip) return;
+    tip.innerHTML = buildWeatherTooltip(w);
+    // Overlay starting at the forecast strip (covering it downward) so the whole
+    // tooltip stays within the fixed-size window instead of clipping off the bottom
+    tip.style.top = `${elements.weatherBlock.offsetTop}px`;
+    tip.style.display = 'block';
+}
+
+function hideWeatherTooltip() {
+    if (elements.weatherTooltip) elements.weatherTooltip.style.display = 'none';
+}
+
+function renderWeather(list) {
+    if (!elements.weatherBlock) return;
+    hideWeatherTooltip();
+    const wasHidden = elements.weatherBlock.style.display === 'none';
+    if (!Array.isArray(list) || list.length === 0) {
+        elements.weatherBlock.style.display = 'none';
+        elements.weatherBlock.innerHTML = '';
+        if (!wasHidden && !isCompactMode) resizeWidget();
+        return;
+    }
+    const currentBucketStart = Math.floor(new Date().getHours() / 4) * 4;
+    elements.weatherBlock.innerHTML = list.map((w) => {
+        const cols = (w.buckets || []).map((b) => `
+            <div class="wf-col${b.start === currentBucketStart ? ' current' : ''}">
+                <span class="wf-hour">${b.start}</span>
+                <span class="wf-icon">${weatherEmoji(b.code)}</span>
+                <span class="wf-temp">${Math.round(b.temp)}°</span>
+            </div>`).join('');
+        return `
+        <div class="weather-loc-panel">
+            <div class="weather-loc-name">${escapeHtml(w.label)}</div>
+            <div class="weather-forecast">${cols}</div>
+        </div>`;
+    }).join('');
+    // Wire hover → in-page tooltip, pairing each panel with its data
+    const panels = elements.weatherBlock.querySelectorAll('.weather-loc-panel');
+    panels.forEach((panel, i) => {
+        panel.addEventListener('mouseenter', () => showWeatherTooltip(list[i]));
+        panel.addEventListener('mouseleave', hideWeatherTooltip);
+    });
+    elements.weatherBlock.style.display = 'flex';
+    if (wasHidden && !isCompactMode) resizeWidget();
+}
+
+function setSysmeter(fillEl, pctEl, value) {
+    if (value === undefined || value === null) return;
+    const v = Math.max(0, Math.min(100, Math.round(value)));
+    fillEl.style.width = `${v}%`;
+    pctEl.textContent = `${v}%`;
+    fillEl.classList.toggle('warn', v >= 75 && v < 90);
+    fillEl.classList.toggle('danger', v >= 90);
+}
+
+function renderSysload(info) {
+    if (!elements.systemRow) return;
+    const wasHidden = elements.systemRow.style.display === 'none';
+    if (!info || !info.available) {
+        elements.systemRow.style.display = 'none';
+        if (!wasHidden && !isCompactMode) resizeWidget();
+        return;
+    }
+    setSysmeter(elements.cpuFill, elements.cpuPct, info.cpu);
+    setSysmeter(elements.ramFill, elements.ramPct, info.ram);
+    elements.systemRow.style.display = 'flex';
+    if (wasHidden && !isCompactMode) resizeWidget();
+}
+
+function setupSystemStats() {
+    window.electronAPI.onSysloadStatus(renderSysload);
+    window.electronAPI.onWeatherStatus(renderWeather);
+}
+
+// Manual window drag for WSL. WSLg (RAIL) doesn't honour CSS -webkit-app-region:
+// drag, and that region also swallows mouse events at the Chromium level — so on
+// WSL we neutralise it (body.wsl-drag) and move the window ourselves via the
+// set-window-position IPC. Native platforms keep the CSS drag.
+function setupManualDrag() {
+    if (!window.electronAPI.isWsl) return;
+    document.body.classList.add('wsl-drag');
+
+    const INTERACTIVE = 'button, input, select, textarea, a, [contenteditable], .weather-loc-panel';
+    let dragging = false;
+    let startScreenX = 0, startScreenY = 0, winX = 0, winY = 0;
+    let pending = null, raf = null;
+
+    document.addEventListener('mousedown', async (e) => {
+        if (e.button !== 0 || e.target.closest(INTERACTIVE)) return;
+        const pos = await window.electronAPI.getWindowPosition();
+        if (!pos) return;
+        dragging = true;
+        startScreenX = e.screenX;
+        startScreenY = e.screenY;
+        winX = pos.x;
+        winY = pos.y;
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        if (e.buttons === 0) { dragging = false; return; } // released off-window
+        pending = { x: Math.round(winX + (e.screenX - startScreenX)), y: Math.round(winY + (e.screenY - startScreenY)) };
+        if (!raf) {
+            raf = requestAnimationFrame(() => {
+                raf = null;
+                if (pending) window.electronAPI.setWindowPosition(pending);
+            });
+        }
+    });
+
+    const end = () => { dragging = false; };
+    window.addEventListener('mouseup', end);
+    window.addEventListener('blur', end);
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = String(str == null ? '' : str);
+    return div.innerHTML;
 }
 
 function stopAutoUpdate() {
@@ -1552,6 +1800,11 @@ async function loadSettings() {
     elements.timeFormat.value = settings.timeFormat || '12h';
     elements.weeklyDateFormat.value = settings.weeklyDateFormat || 'date';
     if (elements.refreshInterval) elements.refreshInterval.value = settings.refreshInterval || '300';
+    const weatherLocations = Array.isArray(settings.weatherLocations) ? settings.weatherLocations : [];
+    if (elements.weatherLabel1) elements.weatherLabel1.value = weatherLocations[0]?.label || '';
+    if (elements.weatherQuery1) elements.weatherQuery1.value = weatherLocations[0]?.query || '';
+    if (elements.weatherLabel2) elements.weatherLabel2.value = weatherLocations[1]?.label || '';
+    if (elements.weatherQuery2) elements.weatherQuery2.value = weatherLocations[1]?.query || '';
     elements.usageAlertsToggle.checked = settings.usageAlerts !== false;
     if (elements.compactModeToggle) elements.compactModeToggle.checked = !!settings.compactMode;
 
@@ -1571,6 +1824,15 @@ async function loadSettings() {
     if (window.electronAPI.platform === 'darwin') {
         document.getElementById('trayLabel').textContent = 'Hide from Dock';
     }
+}
+
+function buildWeatherLocations() {
+    const pairs = [
+        { label: elements.weatherLabel1?.value.trim() || '', query: elements.weatherQuery1?.value.trim() || '' },
+        { label: elements.weatherLabel2?.value.trim() || '', query: elements.weatherQuery2?.value.trim() || '' }
+    ];
+    // Persist only rows that have a city query; drop empty ones
+    return pairs.filter((p) => p.query);
 }
 
 async function saveSettings() {
@@ -1598,6 +1860,7 @@ async function saveSettings() {
         timeFormat: elements.timeFormat.value || '12h',
         weeklyDateFormat: elements.weeklyDateFormat.value || 'date',
         refreshInterval: elements.refreshInterval ? (elements.refreshInterval.value || '300') : '300',
+        weatherLocations: buildWeatherLocations(),
         usageAlerts: elements.usageAlertsToggle.checked,
         compactMode: isCompactMode,
         graphVisible: graphVisible,
@@ -1655,7 +1918,10 @@ async function checkForUpdate() {
 }
 
 // Start the application
-init();
+init().catch((error) => {
+    console.error('Initialization failed:', error);
+    showLoginRequired();
+});
 window.addEventListener('beforeunload', () => {
     stopAutoUpdate();
     if (countdownInterval) clearInterval(countdownInterval);
