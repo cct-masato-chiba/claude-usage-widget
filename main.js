@@ -578,6 +578,15 @@ function showMainWindowClean() {
   enforceAlwaysOnTop(store.get('settings.alwaysOnTop', true));
 }
 
+// WSL topmost workaround. On current WSLg (msrdc) SetWindowPos(HWND_TOPMOST) no
+// longer makes WS_EX_TOPMOST stick on the RAIL proxy window, BUT its z-order
+// raise still works — so re-asserting periodically keeps the widget visible on
+// top. Without it the window sinks behind others and disappears. The cost is a
+// flicker on each raise (a RAIL round-trip); on this WSLg visibility and
+// no-flicker can't both be had. Native Windows uses setAlwaysOnTop and has
+// neither problem. Set false to trade away visibility for no flicker on WSL.
+const WSL_TOPMOST_WORKAROUND_ENABLED = true;
+
 function enforceAlwaysOnTop(enabled) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (enabled) {
@@ -586,7 +595,7 @@ function enforceAlwaysOnTop(enabled) {
   } else {
     mainWindow.setAlwaysOnTop(false);
   }
-  if (isWsl) {
+  if (isWsl && WSL_TOPMOST_WORKAROUND_ENABLED) {
     enabled ? startWslTopmostEnforcer() : stopWslTopmostEnforcer();
   }
 }
@@ -597,10 +606,8 @@ function enforceAlwaysOnTop(enabled) {
  * translated to the Windows z-order. So the widget sinks below native Windows
  * apps even with setAlwaysOnTop(true).
  *
- * Workaround: keep a persistent powershell.exe child process (WSL interop)
- * that finds the widget's window by title on the Windows side and re-asserts
- * HWND_TOPMOST via SetWindowPos every few seconds. TOPMOST is sticky, but the
- * loop covers RAIL recreating the window (e.g. after hide/show).
+ * Workaround (toggle via WSL_TOPMOST_WORKAROUND_ENABLED): keep a persistent
+ * powershell.exe child that re-asserts HWND_TOPMOST via SetWindowPos.
  */
 const WSL_TOPMOST_TITLE = 'Claude Usage Widget';
 let wslTopmostProc = null;
@@ -612,29 +619,22 @@ function wslPsCommand(script) {
 }
 
 // WSLg presents the window with the distro name appended to the title
-// ("Claude Usage Widget (Ubuntu)"), so the lookup matches by prefix.
+// ("Claude Usage Widget (Ubuntu)"). The handle is looked up with Get-Process's
+// MainWindowHandle (below) rather than EnumWindows + GetWindowText — GetWindowText
+// returns empty for RAIL proxy windows, so the enumeration approach finds nothing.
 const WSL_WIN32_TYPE = `
 Add-Type @"
 using System;
-using System.Text;
 using System.Runtime.InteropServices;
 public class W {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int cy, uint f);
-  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
-  public static IntPtr Find(string prefix) {
-    IntPtr found = IntPtr.Zero;
-    EnumWindows(delegate(IntPtr h, IntPtr l) {
-      StringBuilder sb = new StringBuilder(256);
-      GetWindowText(h, sb, 256);
-      if (sb.ToString().StartsWith(prefix)) { found = h; return false; }
-      return true;
-    }, IntPtr.Zero);
-    return found;
-  }
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int idx);
 }
 "@
+function Find-WidgetHwnd {
+  $p = Get-Process | Where-Object { $_.MainWindowTitle -like '${WSL_TOPMOST_TITLE}*' } | Select-Object -First 1
+  if ($p) { return $p.MainWindowHandle } else { return [IntPtr]::Zero }
+}
 `;
 
 function spawnPowershell(args, opts) {
@@ -649,12 +649,19 @@ function spawnPowershell(args, opts) {
 
 function startWslTopmostEnforcer() {
   if (wslTopmostProc) return;
-  // SWP flags 0x13 = NOSIZE | NOMOVE | NOACTIVATE
+  // HWND_TOPMOST is sticky, so only re-assert when the window has actually lost
+  // it (GWL_EXSTYLE -20 lacks WS_EX_TOPMOST 0x8). Re-asserting unconditionally
+  // re-layers the RAIL window every tick, which WSLg renders as a flicker and
+  // which also dismisses native tooltips mid-hover. The read-only GetWindowLong
+  // check has no visual effect. SWP flags 0x13 = NOSIZE | NOMOVE | NOACTIVATE.
   const script = `${WSL_WIN32_TYPE}
 while ($true) {
-  $h = [W]::Find('${WSL_TOPMOST_TITLE}')
-  if ($h -ne [IntPtr]::Zero) { [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x13) | Out-Null }
-  Start-Sleep -Seconds 3
+  $h = Find-WidgetHwnd
+  if ($h -ne [IntPtr]::Zero) {
+    $ex = [W]::GetWindowLong($h, -20)
+    if (($ex -band 0x8) -eq 0) { [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x13) | Out-Null }
+  }
+  Start-Sleep -Seconds 2
 }`;
   wslTopmostProc = spawnPowershell(wslPsCommand(script), { stdio: 'ignore' });
   wslTopmostProc.on('exit', () => { wslTopmostProc = null; });
@@ -669,7 +676,7 @@ function stopWslTopmostEnforcer() {
   }
   // One-shot: drop the sticky TOPMOST flag ([IntPtr](-2) = HWND_NOTOPMOST)
   const script = `${WSL_WIN32_TYPE}
-$h = [W]::Find('${WSL_TOPMOST_TITLE}')
+$h = Find-WidgetHwnd
 if ($h -ne [IntPtr]::Zero) { [W]::SetWindowPos($h, [IntPtr](-2), 0, 0, 0, 0, 0x13) | Out-Null }`;
   spawnPowershell(wslPsCommand(script), { stdio: 'ignore' });
   debugLog('WSL topmost enforcer stopped');
