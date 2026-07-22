@@ -67,7 +67,7 @@ let sessionTray = null;  // Tray icon for Session usage
 let weeklyTray = null;   // Tray icon for Weekly usage
 
 const WIDGET_WIDTH = process.platform === 'darwin' ? 503 : 280;
-const WIDGET_HEIGHT = 218; // includes the CPU/RAM system row + divider above the usage blocks
+const WIDGET_HEIGHT = 198; // includes the CPU/RAM system row + divider above the usage blocks
 const HISTORY_RETENTION_DAYS = 8;
 const CHART_DAYS = 7;
 const MAX_HISTORY_SAMPLES = 10000; // Cap total samples to prevent unbounded growth

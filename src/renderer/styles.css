@@ -468,7 +468,7 @@ canvas,
 
 /* Main Content */
 .content {
-    padding: 14px 4px 8px 14px;
+    padding: 8px 4px 8px 14px;
     position: relative;
 }
 
@@ -479,7 +479,7 @@ canvas,
     gap: 1px;
     color: #b8b8c8;
     font-variant-numeric: tabular-nums;
-    margin: 0 0 14px 12px;
+    margin: 0 0 0 12px;
     white-space: nowrap;
 }
 
@@ -569,7 +569,7 @@ canvas,
     display: flex;
     flex-direction: row;
     gap: 12px;
-    margin: 4px 12px 12px 12px;
+    margin: 0 12px 6px 12px;
     color: #b8b8c8;
     font-variant-numeric: tabular-nums;
 }

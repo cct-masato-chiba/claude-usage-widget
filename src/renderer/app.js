@@ -13,7 +13,7 @@ let graphWasVisible = false; // preserves graph state across compact mode toggle
 let appInitializing = true;  // suppresses _saveViewState during startup restore
 let isFetching = false;       // in-flight guard — prevents overlapping fetchUsageData calls
 const UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
-const WIDGET_HEIGHT_COLLAPSED = 176;
+const WIDGET_HEIGHT_COLLAPSED = 156;
 const WIDGET_ROW_HEIGHT = 30;
 const GRAPH_HEIGHT = 232;
 
@@ -731,7 +731,7 @@ function refreshExtraTimers() {
 const BANNER_HEIGHT = 28;
 const EXPAND_OVERHEAD = 28; // margin-top(12) + padding-top(6) + bottom buffer(10)
 const SYSTEM_ROW_HEIGHT = 42; // CPU/RAM row + divider; only counted when it has data to show
-const WEATHER_HEIGHT = 66; // day forecast block (label + hour/icon/temp rows); counted when shown
+const WEATHER_HEIGHT = 56; // day forecast block (label + hour/icon/temp rows); counted when shown
 
 function resizeWidget(bannerVisible) {
     const hasBanner = bannerVisible !== undefined
