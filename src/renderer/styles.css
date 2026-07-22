@@ -57,6 +57,12 @@ body {
     -webkit-app-region: drag;
 }
 
+/* WSL: CSS drag regions swallow mouse events but don't move the RAIL window, so
+   drag is handled in JS (setupManualDrag). Neutralise every drag region here. */
+body.wsl-drag * {
+    -webkit-app-region: no-drag !important;
+}
+
 /* Title Bar */
 .title-bar {
     background: rgba(0, 0, 0, 0.3);

@@ -162,6 +162,7 @@ async function init() {
     startCurrentDateTime();
     setupBattery();
     setupSystemStats();
+    setupManualDrag();
     credentials = await window.electronAPI.getCredentials();
 
     // Apply saved theme and load thresholds immediately
@@ -1447,6 +1448,48 @@ function renderSysload(info) {
 function setupSystemStats() {
     window.electronAPI.onSysloadStatus(renderSysload);
     window.electronAPI.onWeatherStatus(renderWeather);
+}
+
+// Manual window drag for WSL. WSLg (RAIL) doesn't honour CSS -webkit-app-region:
+// drag, and that region also swallows mouse events at the Chromium level — so on
+// WSL we neutralise it (body.wsl-drag) and move the window ourselves via the
+// set-window-position IPC. Native platforms keep the CSS drag.
+function setupManualDrag() {
+    if (!window.electronAPI.isWsl) return;
+    document.body.classList.add('wsl-drag');
+
+    const INTERACTIVE = 'button, input, select, textarea, a, [contenteditable], .weather-loc-panel';
+    let dragging = false;
+    let startScreenX = 0, startScreenY = 0, winX = 0, winY = 0;
+    let pending = null, raf = null;
+
+    document.addEventListener('mousedown', async (e) => {
+        if (e.button !== 0 || e.target.closest(INTERACTIVE)) return;
+        const pos = await window.electronAPI.getWindowPosition();
+        if (!pos) return;
+        dragging = true;
+        startScreenX = e.screenX;
+        startScreenY = e.screenY;
+        winX = pos.x;
+        winY = pos.y;
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        if (e.buttons === 0) { dragging = false; return; } // released off-window
+        pending = { x: Math.round(winX + (e.screenX - startScreenX)), y: Math.round(winY + (e.screenY - startScreenY)) };
+        if (!raf) {
+            raf = requestAnimationFrame(() => {
+                raf = null;
+                if (pending) window.electronAPI.setWindowPosition(pending);
+            });
+        }
+    });
+
+    const end = () => { dragging = false; };
+    window.addEventListener('mouseup', end);
+    window.addEventListener('blur', end);
 }
 
 function escapeHtml(str) {

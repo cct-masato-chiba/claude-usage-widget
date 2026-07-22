@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform
   platform: process.platform,
   isPortable: process.platform === 'win32' && !!process.env.PORTABLE_EXECUTABLE_FILE,
+  // require('os') is unavailable in the sandboxed preload — rely on the env var,
+  // which is always set inside WSL.
+  isWsl: process.platform === 'linux' && Boolean(process.env.WSL_DISTRO_NAME),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
