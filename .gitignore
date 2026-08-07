@@ -6,6 +6,9 @@ package-lock.json
 dist/
 out/
 
+# Artifacts downloaded from GitHub Actions runs (gh run download -D ./dl)
+dl/
+
 # OS files
 .DS_Store
 Thumbs.db
