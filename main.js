@@ -619,7 +619,9 @@ function wslPsCommand(script) {
 }
 
 // WSLg presents the window with the distro name appended to the title
-// ("Claude Usage Widget (Ubuntu)"). The handle is looked up with Get-Process's
+// ("Claude Usage Widget (Ubuntu)"), and msrdc may also prepend "[WARN:COPY MODE] "
+// when its shared-memory present path degrades — hence the substring match
+// (*title*) rather than a prefix match. The handle is looked up with Get-Process's
 // MainWindowHandle (below) rather than EnumWindows + GetWindowText — GetWindowText
 // returns empty for RAIL proxy windows, so the enumeration approach finds nothing.
 const WSL_WIN32_TYPE = `
@@ -632,7 +634,7 @@ public class W {
 }
 "@
 function Find-WidgetHwnd {
-  $p = Get-Process | Where-Object { $_.MainWindowTitle -like '${WSL_TOPMOST_TITLE}*' } | Select-Object -First 1
+  $p = Get-Process | Where-Object { $_.MainWindowTitle -like '*${WSL_TOPMOST_TITLE}*' } | Select-Object -First 1
   if ($p) { return $p.MainWindowHandle } else { return [IntPtr]::Zero }
 }
 `;
